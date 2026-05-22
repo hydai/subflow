@@ -29,8 +29,13 @@ function extractImportsOf(file: string): Set<string> {
 describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
   it("only mentions tags from the allowed set in src/content/index.ts", () => {
     const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
-    const literals = source.match(/"subflow:[^"]*"/g) ?? [];
-    const used = new Set(literals.map((s) => s.slice(1, -1)));
+    // Match every `subflow:*` occurrence regardless of quote style —
+    // double-quoted, single-quoted, or backtick-templated. The
+    // assertion enforces the invariant that ONLY allow-listed tags
+    // appear in this file; quoting flexibility shouldn't be an escape
+    // hatch.
+    const literals = source.match(/subflow:[a-zA-Z0-9_-]+/g) ?? [];
+    const used = new Set(literals);
     for (const tag of used) {
       expect(ALLOWED_CONTENT_TAGS.has(tag)).toBe(true);
     }
