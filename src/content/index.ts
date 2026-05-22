@@ -130,10 +130,13 @@ function syncSidebar(): void {
 function createSidebarRoot(): HTMLElement {
   const root = document.createElement("div");
   root.id = SIDEBAR_ROOT_ID;
-  // Shadow DOM keeps Subflow CSS isolated from YouTube's styles so the
-  // sidebar can't accidentally affect (or be affected by) the host
-  // page's layout (§6.4 "不污染 YouTube 頁面 layout").
-  root.attachShadow({ mode: "open" });
+  // `mode: "closed"` keeps the shadow root invisible to page scripts:
+  // they cannot reach into `subflow-sidebar-root.shadowRoot` (it's
+  // null) to read user-typed workflow names, trigger button clicks,
+  // or scrape rendered AI responses. #12's renderer will need to
+  // hold its own reference to the ShadowRoot returned by
+  // attachShadow; for now we just create it.
+  root.attachShadow({ mode: "closed" });
   // Position the host fixed at the top-right corner — actual UI lands
   // in #12 once it has tests.
   root.style.position = "fixed";

@@ -17,13 +17,16 @@ const ALLOWED_CONTENT_TAGS = new Set([
   "subflow:request-reextraction",
 ]);
 
-// (No comment-stripping helper here — the matched-quote regex below
-// excludes comment text that doesn't itself contain a same-quote
-// `subflow:foo`-style literal, which is the common case. The narrow
-// edge case of a comment that quotes a tag verbatim — e.g.
-// `// "subflow:foo"` — would currently trigger the assertion, but
-// the file does not do that. We accept the simple regex over a
-// TS-parser dependency.)
+// The matched-quote regex below intentionally catches `subflow:*`
+// tokens wrapped in any of double-quote, single-quote, or backtick.
+// That includes tokens inside comments — comments in this codebase
+// routinely describe tag names with markdown-style backticks (e.g.
+// `subflow:video-changed`). The assertion treats both source-string
+// and doc-string tag mentions the same way: anything that LOOKS
+// like a tag literal must be in ALLOWED_CONTENT_TAGS. Comment
+// mentions of allow-listed tags pass; comment mentions of an
+// undocumented tag would fail just like a real string literal would.
+// That extra strictness is the feature, not a bug.
 
 // Direct runtime imports only — `import type { … }` lines are
 // erased by the TS compiler before Rollup ever sees them, so they
