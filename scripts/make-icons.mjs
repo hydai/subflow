@@ -27,10 +27,17 @@ import { fileURLToPath } from "node:url";
 let sharp;
 try {
   ({ default: sharp } = await import("sharp"));
-} catch {
+} catch (err) {
+  // Two failure modes look the same from a static catch: (a) sharp
+  // is genuinely not installed, (b) sharp IS installed but its
+  // native libvips binding failed to load (often an OS / arch
+  // mismatch on a copied-over node_modules). Print both the install
+  // hint AND the underlying error so the second case is debuggable
+  // without re-running with extra logging.
   console.error(
-    "sharp not installed. Run `npm install --no-save --no-package-lock sharp` first, then re-run this script.",
+    "Failed to load `sharp`. If it is not installed, run `npm install --no-save --no-package-lock sharp` first, then re-run this script.",
   );
+  console.error(`Underlying error: ${err instanceof Error ? err.message : String(err)}`);
   process.exit(1);
 }
 
