@@ -5,13 +5,25 @@
 // that needs to gate-keep a Workflow value before passing it to
 // `setWorkflows` (#8) — e.g. a future bulk-import path.
 //
-// SPEC §7.4 enumerates the rules:
-//   - id, name, url, promptTemplate, autoRun, headers all required
-//   - name + promptTemplate non-empty strings
+// SPEC §7.4 enumerates the rules. validateWorkflow enforces the
+// USER-EDITABLE ones (`name`, `url`, `promptTemplate`, `headers`)
+// because those are the only fields the UI can mutate after
+// creation. The non-editable invariants — `id` is a UUID v4 (issued
+// at creation by `crypto.randomUUID()`) and `autoRun` is a boolean
+// (a checkbox) — are guaranteed structurally by the editor's
+// constructor / DOM wiring, so they don't appear in the rule list
+// below. Storage-load coerces (or drops) malformed values via the
+// options page's `repairWorkflow` helper before the editor ever sees
+// them.
+//
+// User-editable rules:
+//   - name + promptTemplate must be non-empty strings (trim-aware)
 //   - url must use the `https:` scheme on a parseable URL (so
 //     "http://", "ftp://...", or "https:// evil\n" all reject)
 //   - headers MUST NOT contain a `Content-Type` key, case-insensitive
 //     — the runner stamps it as application/json
+//   - every header VALUE must be a string (catches stored data
+//     where a header value was a number / boolean / etc.)
 //
 // Errors are returned as a list (not thrown) so the UI can show all
 // problems at once instead of one-at-a-time.

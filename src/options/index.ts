@@ -161,7 +161,10 @@ async function bootstrap(): Promise<void> {
 function repairWorkflow(value: unknown): Workflow | null {
   if (value === null || typeof value !== "object") return null;
   const w = value as Record<string, unknown>;
-  if (typeof w.id !== "string") return null;
+  // SPEC §7.4: id is a UUID v4. Drop empty / non-string ids so
+  // downstream code (move / edit / delete by id) can rely on each
+  // row being uniquely addressable.
+  if (typeof w.id !== "string" || w.id.length === 0) return null;
   if (typeof w.name !== "string") return null;
   if (typeof w.url !== "string") return null;
   if (typeof w.promptTemplate !== "string") return null;
@@ -359,7 +362,7 @@ function renderWorkflowRow(w: Workflow, _idx: number): HTMLElement {
 // stale view of the list would shuffle the wrong rows. ID-based
 // lookups always identify the right row in the latest pending list.
 function moveWorkflow(workflow: Workflow, direction: "up" | "down"): void {
-  const base = pendingNext ?? state.workflows;
+  const base = latestPending() ?? state.workflows;
   const idx = base.findIndex((w) => w.id === workflow.id);
   if (idx === -1) return;
   const to = direction === "up" ? idx - 1 : idx + 1;
@@ -373,7 +376,7 @@ function moveWorkflow(workflow: Workflow, direction: "up" | "down"): void {
 function deleteWorkflow(w: Workflow): void {
   const confirmed = confirm(`Delete workflow "${w.name}"?`);
   if (!confirmed) return;
-  const base = pendingNext ?? state.workflows;
+  const base = latestPending() ?? state.workflows;
   const next = base.filter((x) => x.id !== w.id);
   void enqueuePersist(next);
 }
@@ -385,16 +388,32 @@ function deleteWorkflow(w: Workflow): void {
 // queued writes are coalesced — we don't need to ship every
 // intermediate ordering to storage, only the final one the user
 // stopped on.
+//
+// We expose `pendingNext` to the mutation helpers via
+// `latestPending()` so they can base their next mutation on the most
+// recent INTENT (queued OR in-flight), not on the now-stale
+// state.workflows. Without that, a click landing while a write was
+// in flight would compute its mutation from old data.
 let persistQueue: Promise<void> = Promise.resolve();
-let pendingNext: Workflow[] | null = null;
+let queuedNext: Workflow[] | null = null;
+let inFlightNext: Workflow[] | null = null;
+
+function latestPending(): Workflow[] | null {
+  return queuedNext ?? inFlightNext;
+}
 
 function enqueuePersist(next: Workflow[]): Promise<void> {
-  pendingNext = next;
+  queuedNext = next;
   persistQueue = persistQueue.then(async () => {
-    if (pendingNext === null) return;
-    const toWrite = pendingNext;
-    pendingNext = null;
-    await persistAndCommit(toWrite);
+    if (queuedNext === null) return;
+    const toWrite = queuedNext;
+    queuedNext = null;
+    inFlightNext = toWrite;
+    try {
+      await persistAndCommit(toWrite);
+    } finally {
+      inFlightNext = null;
+    }
   });
   return persistQueue;
 }
