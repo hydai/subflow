@@ -1,5 +1,8 @@
 import { defineConfig } from "vitest/config";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
 
 // Coverage is intentionally not configured here: enabling it would
 // require a coverage provider package (e.g. `@vitest/coverage-v8`),
@@ -13,7 +16,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": resolve(__dirname, "src"),
+      "@": resolve(here, "src"),
     },
   },
 });
