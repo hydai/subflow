@@ -1,13 +1,14 @@
 // Single-pass `{{var}}` substitution per SPEC §7.3.
 //
 // The implementation is one `String.prototype.replace(regex, fn)`
-// call — Rollup/V8 invoke the callback once per match using indexes
-// into the ORIGINAL template, so substituted text is never re-scanned
-// (a transcript that happens to contain `{{transcript}}` survives
-// verbatim). Unknown variables and variables whose value is
-// `undefined` leave the original placeholder in place (`{{xxx}}`),
-// per SPEC §6.6 "未定義變數原樣保留" and §7.3 "videoDetails 對應
-// 欄位缺失時視為未定義".
+// call. Per the ECMAScript spec, when `replace` is invoked with a
+// global regex and a function, the engine invokes the function once
+// per match using indexes into the ORIGINAL string — so substituted
+// text is never re-scanned (a transcript that happens to contain
+// `{{transcript}}` survives verbatim). Unknown variables and
+// variables whose value is `undefined` leave the original
+// placeholder in place (`{{xxx}}`), per SPEC §6.6 "未定義變數原樣
+// 保留" and §7.3 "videoDetails 對應欄位缺失時視為未定義".
 
 import type { PromptVariables } from "./types";
 
