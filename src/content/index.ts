@@ -1,35 +1,31 @@
 // Subflow content script entry (isolated world).
-// Real behavior is delivered by later issues (e.g. #11, #12).
+//
+// Two responsibilities live here:
+//
+//   1. Bridge specific `window.postMessage` envelopes from the
+//      main-world script (#4) into chrome.runtime.sendMessage, since
+//      the main world has no access to chrome.* APIs.
+//
+//   2. SPEC §6.4 sidebar lifecycle (#11): inject a Shadow-DOM-isolated
+//      root element when the page is a YouTube watch URL, remove it
+//      when the user navigates elsewhere, and on SPA navigation to a
+//      different videoId notify the background so it can clean up
+//      cache entries that no longer belong.
 //
 // content.js is loaded by Chrome as a classic script (the
 // `content_scripts` entry in manifest.json does not set `"type":
-// "module"`), so the emitted bundle must contain no ESM module syntax
-// — neither `import` nor `export`. Today this script's only job is to
-// bridge specific `window.postMessage` envelopes from the main-world
-// content script (#4) into chrome.runtime.sendMessage, since the main
-// world has no access to chrome.* APIs.
-//
-// To keep the bundle import-free we deliberately do NOT import shared
-// constants from `@/lib/messages` here: doing so would force Rollup
-// to emit a shared chunk that the classic content script could not
-// load. The expected postMessage tags are hardcoded below; the test
-// in `tests/content-bridge.test.ts` keeps them in sync with the
-// canonical constants in `src/lib/messages.ts`. Any page-world script
-// can call `window.postMessage`, so the whitelist keeps the bridge
-// narrow — only known tags get forwarded; everything else is dropped.
+// "module"`), so the emitted bundle must contain no ESM module syntax.
+// We deliberately keep the file import-graph tiny so Rollup inlines
+// everything into a single self-contained bundle: parseWatchPageUrl is
+// the only consumer of @/lib/watch-page, so it's inlined; no message-
+// tag constants are imported (the whitelist is duplicated inline and
+// kept in sync by tests/content-bridge.test.ts).
 
-// The bare `export {}` at the bottom switches TypeScript from
-// "script" mode to "module" mode for this file, so the constants and
-// helpers below stay file-local rather than entering the global TS
-// scope. Rollup strips the empty re-export from the emitted bundle
-// (no semantic effect), so the classic-script load is unaffected.
+import { parseWatchPageUrl } from "@/lib/watch-page";
+
 const PLAYER_DATA_TAG = "subflow:player-data-extracted";
+const SIDEBAR_ROOT_ID = "subflow-sidebar-root";
 
-// Minimal shape check for each allowed tag. Any page-world script can
-// call window.postMessage with a valid tag, so forwarding the raw
-// payload through to chrome.runtime would let a hostile page DoS the
-// background or inject garbage result shapes. Each tag has a small
-// inline validator that the bridge consults before forwarding.
 function isPlayerDataPayload(value: unknown): boolean {
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
@@ -48,14 +44,8 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   const candidate = data as { type?: unknown };
   if (typeof candidate.type !== "string") return;
 
-  // Each allowed tag has its own minimal validator. Adding a new tag
-  // here requires adding both the tag and a validator branch, which
-  // forces a deliberate code review.
   if (candidate.type === PLAYER_DATA_TAG) {
     if (!isPlayerDataPayload(data)) return;
-    // Forward only the fields the contract declares, in case the
-    // page script attached extra keys. A page-controlled payload
-    // never lands in chrome.runtime.sendMessage unchanged.
     const d = data as { href: string; result: unknown };
     void chrome.runtime.sendMessage({
       type: PLAYER_DATA_TAG,
@@ -65,5 +55,79 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
     return;
   }
 });
+
+// --------------------------------------------------------------------
+// Sidebar lifecycle (#11)
+// --------------------------------------------------------------------
+
+// Module-scoped: survives `yt-navigate-finish` event fires so we can
+// distinguish "first injection on this page" from "SPA-switched to a
+// different video". Both `videoId` and the DOM root are tracked
+// together since they always change in lock-step.
+let currentVideoId: string | null = null;
+let sidebarRoot: HTMLElement | null = null;
+
+function syncSidebar(): void {
+  const info = parseWatchPageUrl(window.location.href);
+  if (info === null) {
+    // Off the watch route — remove the sidebar entirely. The content
+    // script keeps running because YouTube SPA navigation never
+    // re-injects content scripts.
+    if (sidebarRoot !== null) {
+      sidebarRoot.remove();
+      sidebarRoot = null;
+    }
+    currentVideoId = null;
+    return;
+  }
+
+  if (sidebarRoot === null) {
+    sidebarRoot = createSidebarRoot();
+    document.body.appendChild(sidebarRoot);
+    currentVideoId = info.videoId;
+    return;
+  }
+
+  if (info.videoId !== currentVideoId) {
+    // SPA navigated to a different video. Keep the sidebar but tell
+    // the background to drop cache entries for the previous video
+    // (SubtitleService.changeVideo from #7).
+    currentVideoId = info.videoId;
+    void chrome.runtime.sendMessage({
+      type: "subflow:video-changed",
+      videoId: info.videoId,
+    });
+  }
+}
+
+function createSidebarRoot(): HTMLElement {
+  const root = document.createElement("div");
+  root.id = SIDEBAR_ROOT_ID;
+  // Shadow DOM keeps Subflow CSS isolated from YouTube's styles so the
+  // sidebar can't accidentally affect (or be affected by) the host
+  // page's layout (§6.4 "不污染 YouTube 頁面 layout").
+  root.attachShadow({ mode: "open" });
+  // Position the host fixed at the top-right corner — actual UI lands
+  // in #12 once it has tests.
+  root.style.position = "fixed";
+  root.style.top = "0";
+  root.style.right = "0";
+  root.style.zIndex = "2147483647";
+  return root;
+}
+
+// First sync at document_idle — manifest's `run_at` already covers
+// "DOM ready", so the body element exists.
+syncSidebar();
+
+// YouTube emits this on every SPA navigation finish; observing it
+// directly is much cheaper than polling.
+document.addEventListener("yt-navigate-finish", syncSidebar);
+
+// Browser-level fallback in case YouTube changes their event name. A
+// `popstate` covers back/forward; we also poll the URL on each event
+// to catch the cases that don't dispatch popstate (e.g. internal
+// history.pushState followed by no further navigation event).
+window.addEventListener("popstate", syncSidebar);
 
 export {};
