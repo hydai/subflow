@@ -8,18 +8,17 @@
 // Subsequent issues (#5-#7, #15, #16, #18) plug subtitle reading,
 // workflow execution, and error coverage into the same router.
 
-import type { Message } from "@/lib/messages";
-
 chrome.action.onClicked.addListener(() => {
   chrome.runtime.openOptionsPage();
 });
 
 // Narrow the inbound value just enough to read its discriminator
-// safely. We deliberately do NOT claim the value is a fully-typed
-// Message here — per-variant validation happens at each case in the
-// router below, so adding a new Message variant cannot accidentally
-// inherit a permissive guard.
-function hasSubflowType(value: unknown): value is { type: Message["type"] } {
+// safely. The runtime only verifies the `subflow:` prefix, so the
+// narrowing target uses a template-literal type that matches exactly
+// what was checked — not the `Message["type"]` union of known
+// literals, which would be claiming more than the runtime proves.
+// Per-variant validation happens at each case in the router below.
+function hasSubflowType(value: unknown): value is { type: `subflow:${string}` } {
   if (value === null || typeof value !== "object") return false;
   const candidate = value as { type?: unknown };
   return typeof candidate.type === "string" && candidate.type.startsWith("subflow:");
