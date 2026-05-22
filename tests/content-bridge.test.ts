@@ -14,7 +14,19 @@ const repoRoot = resolve(here, "..");
 const ALLOWED_CONTENT_TAGS = new Set([
   PLAYER_DATA_POSTMESSAGE_TAG,
   "subflow:video-changed",
+  "subflow:request-reextraction",
 ]);
+
+// Strip JS/TS comments (line + block) before scanning a source file
+// for tag literals. The test's invariant is "only allow-listed tags
+// appear as runtime string values", which means comment text — even
+// if it happens to include `'subflow:…'` in an example — must not
+// fail the test or weaken the assertion.
+function stripComments(source: string): string {
+  // Order matters: block comments first so a `// foo /* still a comment` line
+  // is handled correctly.
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+}
 
 // Direct runtime imports only — `import type { … }` lines are
 // erased by the TS compiler before Rollup ever sees them, so they
@@ -32,11 +44,13 @@ function extractImportsOf(file: string): Set<string> {
 
 describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
   it("only mentions tags from the allowed set in src/content/index.ts string literals", () => {
-    const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
+    const source = stripComments(
+      readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8"),
+    );
     // Match `subflow:*` ONLY inside a string literal — double-quoted,
-    // single-quoted, or backtick-templated. Comments and identifiers
-    // are deliberately excluded so this test enforces "what gets
-    // emitted at runtime" rather than "what appears in source text".
+    // single-quoted, or backtick-templated. Comments are stripped
+    // first (see `stripComments`) so tag tokens inside documentation
+    // can't fail the test or weaken the assertion.
     const stringRe = /(["'`])(subflow:[a-zA-Z0-9_-]+)\1/g;
     const used = new Set<string>();
     for (const m of source.matchAll(stringRe)) used.add(m[2]!);

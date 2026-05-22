@@ -92,17 +92,32 @@ function syncSidebar(): void {
   }
 
   if (info.videoId !== lastVideoId) {
-    // First sight of this videoId in this tab, OR a SPA navigation
-    // to a different video. Either way, tell the background so
-    // SubtitleService.changeVideo (#7) can prune cache entries for
-    // the previous video. The very first observation in a tab —
-    // before any cache exists — is harmless: changeVideo on an empty
-    // tab state is a no-op.
+    const isInitialObservation = lastVideoId === null;
     lastVideoId = info.videoId;
-    void chrome.runtime.sendMessage({
-      type: "subflow:video-changed",
-      videoId: info.videoId,
-    });
+
+    if (!isInitialObservation) {
+      // SPA navigation between two videos. Tell the background so
+      // SubtitleService.changeVideo (#7) can prune cache entries
+      // for the previous video and reset its playerData. We
+      // deliberately skip this on the very FIRST observation in
+      // the tab — at that point the freshly-extracted player data
+      // arriving from the main-world script could be wiped by a
+      // racing changeVideo if the two messages cross.
+      void chrome.runtime.sendMessage({
+        type: "subflow:video-changed",
+        videoId: info.videoId,
+      });
+
+      // SPA navigation does NOT re-inject the main-world content
+      // script, but ytInitialPlayerResponse on the page is updated
+      // for the new video. Ask the main-world script (via the
+      // same postMessage bridge it uses outbound) to re-read and
+      // re-post for this new videoId.
+      window.postMessage(
+        { type: "subflow:request-reextraction" },
+        window.location.origin,
+      );
+    }
   }
 }
 
