@@ -153,7 +153,12 @@ function isRequestSubtitlePayload(value: unknown): value is RequestSubtitlePaylo
   if (v.type !== "subflow:request-subtitle") return false;
   if (typeof v.videoId !== "string" || v.videoId.length === 0) return false;
   if (!Array.isArray(v.languagePriority)) return false;
-  return v.languagePriority.every((entry): entry is string => typeof entry === "string");
+  // Reject blank / whitespace-only entries: an empty `languageCode`
+  // flows into translation derivation as `tlang=` and produces
+  // ambiguous cache keys like `<videoId>|`.
+  return v.languagePriority.every(
+    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+  );
 }
 
 function isRefetchSubtitlePayload(value: unknown): value is RefetchSubtitlePayload {

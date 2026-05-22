@@ -87,7 +87,15 @@ export class SubtitleService {
       return failure("parse-failed", "player data not yet available for this tab");
     }
     if (!playerData.ok) {
-      return failure(extractErrorToStatus(playerData.error), playerData.error.type);
+      // MALFORMED_PLAYER_RESPONSE carries an explanatory `reason`;
+      // surface it as the message so the sidebar / logs can show
+      // why parsing failed. MISSING_PLAYER_RESPONSE has no extra
+      // diagnostic, so we fall back to the type string.
+      const message =
+        playerData.error.type === "MALFORMED_PLAYER_RESPONSE"
+          ? playerData.error.reason
+          : playerData.error.type;
+      return failure(extractErrorToStatus(playerData.error), message);
     }
 
     // Guard against the SPA-navigation race where a request lands
