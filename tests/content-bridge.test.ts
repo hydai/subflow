@@ -17,11 +17,13 @@ const ALLOWED_CONTENT_TAGS = new Set([
   "subflow:request-reextraction",
 ]);
 
-// (No comment-stripping helper here — the tag scan below uses a
-// matched-quote regex that ALREADY excludes comments because comment
-// syntax doesn't begin with a string-delimiter. We keep the test
-// dependency-free rather than pulling in a TS parser for a
-// nice-to-have.)
+// (No comment-stripping helper here — the matched-quote regex below
+// excludes comment text that doesn't itself contain a same-quote
+// `subflow:foo`-style literal, which is the common case. The narrow
+// edge case of a comment that quotes a tag verbatim — e.g.
+// `// "subflow:foo"` — would currently trigger the assertion, but
+// the file does not do that. We accept the simple regex over a
+// TS-parser dependency.)
 
 // Direct runtime imports only — `import type { … }` lines are
 // erased by the TS compiler before Rollup ever sees them, so they
@@ -65,6 +67,20 @@ describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
     expect(source).toContain(`"${PLAYER_DATA_POSTMESSAGE_TAG}"`);
   });
 
+  // The two classic-script entries each duplicate this tag inline
+  // because importing a shared constant from @/lib/messages would
+  // create a Rollup shared chunk (breaking the classic-script load).
+  // Drift between the two copies would silently break SPA-driven
+  // re-extraction, so we assert here that both sources mention the
+  // exact same literal.
+  it("keeps the request-reextraction tag in sync between content.ts and main-world.ts", () => {
+    const expectedLiteral = `"subflow:request-reextraction"`;
+    const contentSource = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
+    const mainWorldSource = readFileSync(resolve(repoRoot, "src/content/main-world.ts"), "utf8");
+    expect(contentSource).toContain(expectedLiteral);
+    expect(mainWorldSource).toContain(expectedLiteral);
+  });
+
   // Classic-script entries (main-world.ts + content/index.ts) must
   // never share an `@/lib/*` import with ANY other build entry. The
   // moment two entries import the same module, Rollup emits a shared
@@ -73,9 +89,11 @@ describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
   // load. With single-consumer imports, Rollup inlines.
   //
   // The check below walks the direct imports of each entry source
-  // and asserts that every `@/lib/*` module that a classic entry
-  // pulls in is unique across the whole build.
-  it("does not share any direct @/lib import between any two build entries", () => {
+  // and asserts that no `@/lib/*` module is imported by both a
+  // classic entry and any other entry. ESM-only entries
+  // (background, sidebar, options) sharing an `@/lib/*` module
+  // among themselves is fine — Rollup chunking is harmless there.
+  it("does not share any direct @/lib import between a classic-script entry and any other entry", () => {
     const entrySources = [
       "src/background/index.ts",
       "src/content/index.ts",
