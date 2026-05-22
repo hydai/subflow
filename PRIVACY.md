@@ -45,6 +45,8 @@ The manifest declares exactly:
 
 Subflow explicitly does **not** request `tabs`, `cookies`, `<all_urls>`, `history`, or `downloads`. SPEC §7.5 enumerates this; a test in `tests/manifest.test.ts` verifies the manifest stays this way.
 
+Workflow POSTs to user-configured URLs do NOT require an additional `host_permissions` entry. Chrome MV3 background service workers can issue `fetch()` to any HTTPS origin; the target endpoint is reachable as long as it returns CORS headers permitting Subflow's `chrome-extension://<id>` origin. This means a workflow URL is approved by the user once (in the options page) and never elevated into a host permission — the extension's promiscuous reach is bounded by the CORS contract on the receiving side, not by anything Subflow grants itself.
+
 ## Subtitle data
 
 Subtitle text comes directly from YouTube's player response on the page you're watching. Subflow parses it locally and feeds it into your prompt template. The transcript is sent to the endpoint **you** configured as part of the workflow request body; it is never sent anywhere else.
