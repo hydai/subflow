@@ -82,13 +82,17 @@ function syncSidebar(): void {
     if (sidebarRoot !== null) {
       sidebarRoot.remove();
       sidebarRoot = null;
+      sidebarShadow = null;
     }
     return;
   }
 
   if (sidebarRoot === null) {
-    sidebarRoot = createSidebarRoot();
+    const { host, shadow } = createSidebarRoot();
+    sidebarRoot = host;
+    sidebarShadow = shadow;
     document.body.appendChild(sidebarRoot);
+    renderSidebar(sidebarShadow);
   }
 
   if (info.videoId !== lastVideoId) {
@@ -127,23 +131,41 @@ function syncSidebar(): void {
   }
 }
 
-function createSidebarRoot(): HTMLElement {
-  const root = document.createElement("div");
-  root.id = SIDEBAR_ROOT_ID;
+// Closed-mode ShadowRoot reference. With `mode: "closed"`,
+// `host.shadowRoot` returns null to EVERY caller — including this
+// module — so we must capture the value returned by attachShadow
+// ourselves. #12's renderer reads this via the renderSidebar() stub
+// below.
+let sidebarShadow: ShadowRoot | null = null;
+
+interface SidebarRoot {
+  host: HTMLElement;
+  shadow: ShadowRoot;
+}
+
+function createSidebarRoot(): SidebarRoot {
+  const host = document.createElement("div");
+  host.id = SIDEBAR_ROOT_ID;
   // `mode: "closed"` keeps the shadow root invisible to page scripts:
   // they cannot reach into `subflow-sidebar-root.shadowRoot` (it's
   // null) to read user-typed workflow names, trigger button clicks,
-  // or scrape rendered AI responses. #12's renderer will need to
-  // hold its own reference to the ShadowRoot returned by
-  // attachShadow; for now we just create it.
-  root.attachShadow({ mode: "closed" });
+  // or scrape rendered AI responses.
+  const shadow = host.attachShadow({ mode: "closed" });
   // Position the host fixed at the top-right corner — actual UI lands
   // in #12 once it has tests.
-  root.style.position = "fixed";
-  root.style.top = "0";
-  root.style.right = "0";
-  root.style.zIndex = "2147483647";
-  return root;
+  host.style.position = "fixed";
+  host.style.top = "0";
+  host.style.right = "0";
+  host.style.zIndex = "2147483647";
+  return { host, shadow };
+}
+
+// Stub renderer — #12 replaces this with real DOM construction. Lives
+// here as a stub so the closed-mode ShadowRoot reference has a
+// concrete consumer in this module (and #12's wire-up is a single
+// function-body edit rather than a structural refactor).
+function renderSidebar(shadow: ShadowRoot | null): void {
+  if (shadow === null) return;
 }
 
 // First sync at document_idle — manifest's `run_at` already covers

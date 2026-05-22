@@ -43,7 +43,7 @@ function extractImportsOf(file: string): Set<string> {
 }
 
 describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
-  it("only mentions tags from the allowed set in src/content/index.ts string literals", () => {
+  it("only mentions tags from the allowed set anywhere in src/content/index.ts (string literals and quoted-in-comments)", () => {
     const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
     // Match `subflow:*` ONLY when the token is wrapped in matching
     // quotes — `"…"`, `'…'`, or `` `…` ``. A line comment like
