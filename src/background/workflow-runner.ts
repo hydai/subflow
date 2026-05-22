@@ -1,4 +1,4 @@
-// Workflow HTTP POST runner — implements SPEC §6.3 + §7.2.
+// Workflow HTTP POST runner — implements SPEC §6.3 + §7.2 + §7.6.
 //
 // Given a (workflow, vars) pair, substitute the prompt template, POST
 // `{ prompt: substituted }` as application/json to the workflow URL,
@@ -14,17 +14,25 @@
 //     (storage-time validation in #9 / #10 already rejects user-
 //     supplied Content-Type, so no collision is possible here)
 //   - body: JSON.stringify({ prompt: substituted })
-//   - timeout: 60s, enforced by AbortController so the promise rejects
-//     with an AbortError that we surface as outcome: "timeout"
-//   - 2xx → success (body unchanged); 4xx/5xx → http-error (body
-//     truncation is the sidebar's responsibility per #18)
+//   - timeout: 60s, enforced by AbortController. The timer must remain
+//     armed until the response BODY has been fully read — `fetch`
+//     resolves once headers arrive, so a slow / streaming body could
+//     otherwise exceed the limit without being aborted.
+//   - 2xx → success (body unchanged); 4xx/5xx → http-error with the
+//     body truncated to 2000 chars per SPEC §7.6
 //   - network failure (DNS, CORS, TLS, reset, etc.) → network-error
-//     with the underlying message
+//     with the underlying message; statusCode is omitted because no
+//     HTTP status is known in that path
 
 import { substitute } from "@/lib/substitute";
 import type { PromptVariables, Workflow, WorkflowResult } from "@/lib/types";
 
 export const WORKFLOW_TIMEOUT_MS = 60_000;
+// SPEC §7.6: 4xx / 5xx response bodies are displayed truncated to the
+// first 2000 characters with `…(truncated)` appended; 2xx bodies are
+// shown in full.
+export const ERROR_BODY_CHAR_LIMIT = 2000;
+const TRUNCATION_MARKER = "…(truncated)";
 
 export interface WorkflowRunnerDeps {
   // Defaults to `globalThis.fetch` for production callers; tests pass
@@ -66,40 +74,22 @@ export async function runWorkflow(
     });
   } catch (err) {
     clearTimeout(timeoutHandle);
-    if (isAbortError(err)) {
-      return {
-        workflowId: workflow.id,
-        workflowName: workflow.name,
-        outcome: "timeout",
-        body: `Request timed out after ${WORKFLOW_TIMEOUT_MS / 1000}s`,
-        timestamp,
-      };
-    }
-    return {
-      workflowId: workflow.id,
-      workflowName: workflow.name,
-      outcome: "network-error",
-      body: err instanceof Error ? err.message : String(err),
-      timestamp,
-    };
+    if (isAbortError(err)) return timeoutResult(workflow, timestamp);
+    return networkErrorResult(workflow, timestamp, err);
   }
-  clearTimeout(timeoutHandle);
 
-  // Reading the body can also time out / abort in theory; we keep it
-  // simple and let any throw fall through to network-error.
+  // Keep the timer ARMED until we finish reading the body — fetch's
+  // promise resolved on headers, so a slow body still needs the abort
+  // safety net. We only clear after text() resolves or rejects.
   let responseBody: string;
   try {
     responseBody = await response.text();
   } catch (err) {
-    return {
-      workflowId: workflow.id,
-      workflowName: workflow.name,
-      outcome: "network-error",
-      statusCode: response.status,
-      body: err instanceof Error ? err.message : String(err),
-      timestamp,
-    };
+    clearTimeout(timeoutHandle);
+    if (isAbortError(err)) return timeoutResult(workflow, timestamp);
+    return networkErrorResult(workflow, timestamp, err);
   }
+  clearTimeout(timeoutHandle);
 
   if (response.ok) {
     return {
@@ -116,11 +106,51 @@ export async function runWorkflow(
     workflowName: workflow.name,
     outcome: "http-error",
     statusCode: response.status,
-    body: responseBody,
+    body: truncate(responseBody, ERROR_BODY_CHAR_LIMIT),
     timestamp,
   };
 }
 
+function timeoutResult(workflow: Workflow, timestamp: number): WorkflowResult {
+  return {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    outcome: "timeout",
+    body: `Request timed out after ${WORKFLOW_TIMEOUT_MS / 1000}s`,
+    timestamp,
+  };
+}
+
+function networkErrorResult(
+  workflow: Workflow,
+  timestamp: number,
+  err: unknown,
+): WorkflowResult {
+  // `statusCode` is intentionally omitted — no HTTP status is known
+  // on this path, and the shared type documents statusCode as
+  // outcome-conditional.
+  return {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    outcome: "network-error",
+    body: err instanceof Error ? err.message : String(err),
+    timestamp,
+  };
+}
+
+// AbortError comes in two flavours depending on the runtime:
+//   - browsers / Node 18+: a `DOMException` whose `name` is
+//     `"AbortError"` (DOMException extends Error, so `instanceof
+//     Error` is true in practice — but we don't rely on it)
+//   - other runtimes: an `Error` subclass whose `name` is
+//     `"AbortError"`
+// Both share the canonical `name` property, so we check that directly.
 function isAbortError(err: unknown): boolean {
-  return err instanceof Error && err.name === "AbortError";
+  if (err === null || typeof err !== "object") return false;
+  return (err as { name?: unknown }).name === "AbortError";
+}
+
+function truncate(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  return text.slice(0, limit) + TRUNCATION_MARKER;
 }

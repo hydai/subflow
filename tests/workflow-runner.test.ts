@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { runWorkflow, WORKFLOW_TIMEOUT_MS } from "@/background/workflow-runner";
+import {
+  runWorkflow,
+  WORKFLOW_TIMEOUT_MS,
+  ERROR_BODY_CHAR_LIMIT,
+} from "@/background/workflow-runner";
 import type { PromptVariables, Workflow } from "@/lib/types";
 
 const baseWorkflow: Workflow = {
@@ -58,6 +62,16 @@ describe("runWorkflow (SPEC §6.3 + §7.2)", () => {
     expect(result.body).toBe('{"error":"bad request"}');
   });
 
+  it("truncates 4xx/5xx bodies to ERROR_BODY_CHAR_LIMIT per SPEC §7.6", async () => {
+    const bigBody = "x".repeat(ERROR_BODY_CHAR_LIMIT + 500);
+    const fetchImpl = vi.fn(async () => jsonResponse(bigBody, 503));
+    const result = await runWorkflow(baseWorkflow, baseVars, { fetch: fetchImpl });
+    expect(result.outcome).toBe("http-error");
+    expect(result.statusCode).toBe(503);
+    expect(result.body.length).toBe(ERROR_BODY_CHAR_LIMIT + "…(truncated)".length);
+    expect(result.body.endsWith("…(truncated)")).toBe(true);
+  });
+
   it("returns http-error with the body for a 5xx response", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse("server exploded", 500));
     const result = await runWorkflow(baseWorkflow, baseVars, { fetch: fetchImpl });
@@ -106,19 +120,53 @@ describe("runWorkflow (SPEC §6.3 + §7.2)", () => {
     expect(result.statusCode).toBeUndefined();
   });
 
-  it("clears the abort timer on a successful response so it doesn't fire later", async () => {
+  it("classifies a DOMException-shaped AbortError as timeout, not network-error", async () => {
+    // Build a non-Error abort signal — some runtimes deliver
+    // AbortError as a DOMException that may not be `instanceof Error`.
+    const abortLike = { name: "AbortError", message: "aborted" };
+    const fetchImpl = vi.fn(async () => {
+      throw abortLike;
+    });
+    const result = await runWorkflow(baseWorkflow, baseVars, { fetch: fetchImpl });
+    expect(result.outcome).toBe("timeout");
+  });
+
+  it("keeps the abort timer armed until the response body is fully read", async () => {
+    // Slow body: response resolves immediately (headers received) but
+    // .text() takes longer than the timeout. The runner must still
+    // abort.
     vi.useFakeTimers();
+    try {
+      let abortBody: () => void = () => {};
+      const slowBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          abortBody = () => controller.error(new DOMException("aborted", "AbortError"));
+        },
+      });
+      const fetchImpl = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+        init?.signal?.addEventListener("abort", () => abortBody());
+        return new Response(slowBody, { status: 200 });
+      });
+      const promise = runWorkflow(baseWorkflow, baseVars, { fetch: fetchImpl });
+      await vi.advanceTimersByTimeAsync(WORKFLOW_TIMEOUT_MS + 1);
+      const result = await promise;
+      expect(result.outcome).toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the abort timer once the body has been fully read", async () => {
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout");
     try {
       const fetchImpl = vi.fn(async () => jsonResponse("ok", 200));
       const result = await runWorkflow(baseWorkflow, baseVars, { fetch: fetchImpl });
       expect(result.outcome).toBe("success");
-      // If the timer were still pending, advancing past the timeout
-      // would have triggered abort — but the fetch has already
-      // resolved, so this should be a no-op. We just verify nothing
-      // throws.
-      vi.advanceTimersByTime(WORKFLOW_TIMEOUT_MS + 1);
+      // The runner installs exactly one setTimeout; clearTimeout must
+      // be called exactly once on the success path.
+      expect(clearSpy).toHaveBeenCalledTimes(1);
     } finally {
-      vi.useRealTimers();
+      clearSpy.mockRestore();
     }
   });
 });
