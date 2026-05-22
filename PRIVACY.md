@@ -4,6 +4,8 @@ Subflow is designed so that the extension developer (and any future maintainer) 
 
 This document describes exactly what data Subflow touches, where each piece lives, and who could see it. It mirrors the guarantees in `SPEC.md` §3 (Impacts) and §4 (Non-goals); when in doubt the SPEC is authoritative.
 
+> **Status**: this is the privacy contract for Subflow's design. Some user-visible surfaces are still under construction (the options page and sidebar UI); the data-flow rules below already apply to the implemented background / content-script pipeline and constrain everything that lands afterwards.
+
 ## No backend
 
 Subflow has no backend infrastructure. There is no Subflow-controlled server that ever sees your subtitles, prompts, AI responses, workflow definitions, or API keys.

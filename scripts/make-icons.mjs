@@ -10,11 +10,15 @@
 // heavy (~50 MB across native modules) and only this one-shot
 // generator needs it. Install on demand:
 //
-//   npm install --no-save sharp
+//   npm install --no-save --no-package-lock sharp
 //   node scripts/make-icons.mjs
 //
-// The generated PNGs are committed to the repo; downstream
-// developers do NOT need sharp to build the extension.
+// `--no-save` keeps package.json untouched and
+// `--no-package-lock` prevents npm from rewriting package-lock.json
+// for the one-off install (otherwise the lockfile would churn every
+// time someone regenerates icons). The generated PNGs are committed
+// to the repo; downstream developers do NOT need sharp to build the
+// extension.
 
 import { writeFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
