@@ -20,7 +20,7 @@
 // to the repo; downstream developers do NOT need sharp to build the
 // extension.
 
-import { writeFile } from "node:fs/promises";
+import { writeFile, mkdir } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -37,6 +37,12 @@ try {
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 const ICON_DIR = resolve(root, "public/icons");
+
+// Make sure the target directory exists. A fresh checkout that
+// renamed or removed `public/icons/` would otherwise fail with
+// ENOENT inside writeFile — the recursive mkdir gives a useful
+// no-op if the directory is already there.
+await mkdir(ICON_DIR, { recursive: true });
 
 const BG = "rgb(37, 99, 235)";
 const FG = "#ffffff";
