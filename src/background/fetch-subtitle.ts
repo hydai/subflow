@@ -23,7 +23,7 @@ export async function fetchSubtitleXml(baseUrl: string): Promise<string> {
   } catch {
     throw new Error(`SUBTITLE_FETCH_FAILED:bad-url`);
   }
-  if (url.origin !== YOUTUBE_ORIGIN || !url.pathname.startsWith(TIMEDTEXT_PATH)) {
+  if (url.origin !== YOUTUBE_ORIGIN || url.pathname !== TIMEDTEXT_PATH) {
     throw new Error(`SUBTITLE_FETCH_FAILED:disallowed-url`);
   }
   const response = await fetch(baseUrl, { credentials: "omit", redirect: "error" });

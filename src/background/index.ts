@@ -151,7 +151,7 @@ function isRequestSubtitlePayload(value: unknown): value is RequestSubtitlePaylo
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
   if (v.type !== "subflow:request-subtitle") return false;
-  if (typeof v.videoId !== "string") return false;
+  if (typeof v.videoId !== "string" || v.videoId.length === 0) return false;
   if (!Array.isArray(v.languagePriority)) return false;
   return v.languagePriority.every((entry): entry is string => typeof entry === "string");
 }
@@ -159,13 +159,21 @@ function isRequestSubtitlePayload(value: unknown): value is RequestSubtitlePaylo
 function isRefetchSubtitlePayload(value: unknown): value is RefetchSubtitlePayload {
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  return v.type === "subflow:refetch-subtitle" && typeof v.videoId === "string";
+  return (
+    v.type === "subflow:refetch-subtitle" &&
+    typeof v.videoId === "string" &&
+    v.videoId.length > 0
+  );
 }
 
 function isVideoChangedPayload(value: unknown): value is VideoChangedPayload {
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
-  return v.type === "subflow:video-changed" && typeof v.videoId === "string";
+  return (
+    v.type === "subflow:video-changed" &&
+    typeof v.videoId === "string" &&
+    v.videoId.length > 0
+  );
 }
 
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
