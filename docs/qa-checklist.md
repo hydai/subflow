@@ -11,7 +11,7 @@ A single-pass acceptance checklist for shipping a Subflow release to the Chrome 
 - [ ] `npm run package` exits 0 and writes `subflow-v<version>.zip`.
 - [ ] Unpacking the zip shows `manifest.json`, `background.js`, `content.js`, `content-main.js`, `options.html`, `options.js`, `sidebar.js`, `icons/`, and no `node_modules/` or `*.map` files.
 - [ ] `subflow-v<version>.zip` is under the Chrome Web Store 10 MB upload limit.
-- [ ] Dragging the zip into `chrome://extensions/` (or "Load unpacked" on the extracted dist/) succeeds with no console errors.
+- [ ] Extract the zip and use "Load unpacked" on the extracted directory at `chrome://extensions/` (with Developer mode on); load succeeds with no console errors. Note: Chrome's `chrome://extensions/` drag-and-drop accepts `.crx` packages, not the `.zip` Subflow ships to the Web Store, so the extracted "Load unpacked" path is canonical for this local-QA flow.
 - [ ] Manifest permission dialog lists only "Read your data on www.youtube.com" — nothing else.
 
 ## User journeys (SPEC §5.2)
@@ -64,8 +64,8 @@ For each row, set up the trigger, then verify the sidebar message matches the co
 | Service worker terminated mid-flight | Trigger a workflow then immediately reload `chrome://extensions/` Subflow card | Result list shows "Background service interrupted" with a "Retry" button |
 | Workflow form rejects `Content-Type` header | Try to save a workflow with `headers: { "Content-Type": "text/plain" }` (any casing) | Save blocked; inline error references the header |
 | Workflow form rejects `http://` URL | Try to save a workflow with `http://example.com` | Save blocked; inline error |
-| `chrome.storage.local.set` fails | Fill `chrome.storage.local` near its 5 MB quota and try to save | Save blocked; inline error includes the underlying chrome.runtime.lastError message |
-| `chrome.storage.local.get` fails | (Hard to simulate) Force `get` to reject via debugger | Sidebar shows "Could not read workflow settings" with a "Retry" button; subtitle reading is unaffected |
+| `chrome.storage.local.set` fails | Fill `chrome.storage.local` near its 5 MB quota and try to save | Save blocked; inline error includes the underlying `chrome.runtime.lastError` message |
+| `chrome.storage.local.get` fails | (Hard to simulate.) Force `get` to reject via debugger | Sidebar shows "Could not read workflow settings" with a "Retry" button; subtitle reading is unaffected |
 | Live video | Open a live stream URL | Sidebar shows "Subflow does not support live / premiere"; workflow buttons disabled |
 | Premiere (upcoming) | Open a premiere countdown URL | Same as live |
 | Undefined prompt variable | Use a template with `{{nonexistent}}` and run | The substituted prompt sent to the endpoint contains the literal `{{nonexistent}}` (no substitution) |

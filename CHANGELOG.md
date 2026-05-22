@@ -23,5 +23,9 @@ The visible options page UI ([#9](https://github.com/hydai/subflow/issues/9), [#
 
 First public release will be cut after the issues listed under "Known not-yet-implemented" are merged. Until then, this CHANGELOG accumulates entries under `[Unreleased]`.
 
-[Unreleased]: https://github.com/hydai/subflow/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hydai/subflow/releases/tag/v0.1.0
+[Unreleased]: https://github.com/hydai/subflow/commits/main
+<!--
+When the first release tag (v0.1.0) is cut, replace the line above
+with a `.../compare/v0.1.0...HEAD` link and add the matching
+`[0.1.0]: .../releases/tag/v0.1.0` line below.
+-->
