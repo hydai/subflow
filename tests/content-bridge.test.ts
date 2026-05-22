@@ -16,7 +16,7 @@ describe("content-script bridge wiring (SPEC §6.1.1, #4)", () => {
   // AND that no other `subflow:` literal sneaks in alongside it. If a
   // future variant is added, the developer must update both this list
   // and src/lib/messages.ts deliberately.
-  it("whitelists exactly the canonical player-data postMessage tag in content.ts", () => {
+  it("whitelists exactly the canonical player-data postMessage tag in src/content/index.ts", () => {
     const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
     expect(source).toContain(`"${PLAYER_DATA_POSTMESSAGE_TAG}"`);
 
@@ -34,7 +34,7 @@ describe("content-script bridge wiring (SPEC §6.1.1, #4)", () => {
     expect(source).toContain(`"${PLAYER_DATA_POSTMESSAGE_TAG}"`);
   });
 
-  // content.ts is the isolated-world bridge. It must stay free of
+  // src/content/index.ts is the isolated-world bridge. It must stay free of
   // module-level imports from `@/lib/*` so the classic-script bundle
   // doesn't pull in a shared chunk. The forwarding logic relies on
   // an inline whitelist (asserted by the test above) rather than on

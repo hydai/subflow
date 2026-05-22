@@ -18,11 +18,11 @@
 // can call `window.postMessage`, so the whitelist keeps the bridge
 // narrow — only known tags get forwarded; everything else is dropped.
 
-// The bare `export {}` below switches TypeScript from "script" mode
-// to "module" mode for this file, so `ALLOWED_TAGS` stays
-// file-local rather than entering the global TS scope. Rollup strips
-// the empty re-export from the emitted bundle (no semantic effect),
-// so the classic-script load is unaffected.
+// The bare `export {}` at the bottom switches TypeScript from
+// "script" mode to "module" mode for this file, so the constants and
+// helpers below stay file-local rather than entering the global TS
+// scope. Rollup strips the empty re-export from the emitted bundle
+// (no semantic effect), so the classic-script load is unaffected.
 const PLAYER_DATA_TAG = "subflow:player-data-extracted";
 
 // Minimal shape check for each allowed tag. Any page-world script can
