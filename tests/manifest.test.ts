@@ -45,13 +45,25 @@ describe("public/manifest.json (SPEC §7.5)", () => {
     expect(manifest).toHaveProperty("background.service_worker", "background.js");
   });
 
-  it("declares a content script for the entire YouTube domain at document_idle", () => {
+  it("declares the isolated content script for the entire YouTube domain at document_idle", () => {
     const contentScripts = manifest.content_scripts as Array<Record<string, unknown>>;
-    expect(contentScripts).toHaveLength(1);
-    const first = contentScripts[0]!;
-    expect(first.matches).toEqual(["https://www.youtube.com/*"]);
-    expect(first.js).toEqual(["content.js"]);
-    expect(first.run_at).toBe("document_idle");
+    expect(contentScripts).toHaveLength(2);
+    const isolated = contentScripts[0]!;
+    expect(isolated.matches).toEqual(["https://www.youtube.com/*"]);
+    expect(isolated.js).toEqual(["content.js"]);
+    expect(isolated.run_at).toBe("document_idle");
+    // The isolated entry intentionally has no `world` field so it
+    // defaults to ISOLATED and keeps chrome.* access.
+    expect(isolated).not.toHaveProperty("world");
+  });
+
+  it("declares the main-world content script so it can read window.ytInitialPlayerResponse (SPEC §6.1.1)", () => {
+    const contentScripts = manifest.content_scripts as Array<Record<string, unknown>>;
+    const mainWorld = contentScripts[1]!;
+    expect(mainWorld.matches).toEqual(["https://www.youtube.com/*"]);
+    expect(mainWorld.js).toEqual(["content-main.js"]);
+    expect(mainWorld.run_at).toBe("document_idle");
+    expect(mainWorld.world).toBe("MAIN");
   });
 
   it("ships icons for all four standard sizes", () => {
