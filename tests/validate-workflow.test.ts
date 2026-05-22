@@ -46,6 +46,11 @@ describe("validateWorkflow (SPEC §7.4)", () => {
     expect(errors.some((e) => e.field === "url")).toBe(true);
   });
 
+  it("rejects empty URL string with a `url` field error", () => {
+    const errors = validateWorkflow(workflow({ url: "" }));
+    expect(errors.some((e) => e.field === "url")).toBe(true);
+  });
+
   it("rejects empty promptTemplate", () => {
     const errors = validateWorkflow(workflow({ promptTemplate: "" }));
     expect(errors.some((e) => e.field === "promptTemplate")).toBe(true);
@@ -86,6 +91,26 @@ describe("validateWorkflow (SPEC §7.4)", () => {
       workflow({ headers: { Authorization: "Bearer x" } }),
     );
     expect(errors.some((e) => e.field === "headers")).toBe(false);
+  });
+
+  it("rejects a non-string header value (number)", () => {
+    // Workflow.headers is `Record<string, string>` at compile time
+    // but at runtime stored data can contain non-strings (older
+    // schema / manual edit). Cast through `unknown` so we can poke
+    // a number into the structure for the validator to catch.
+    const broken = workflow({ headers: { "X-Count": 42 as unknown as string } });
+    const errors = validateWorkflow(broken);
+    const err = errors.find((e) => e.field === "headers");
+    expect(err).toBeDefined();
+    expect(err?.message).toContain("non-string");
+  });
+
+  it("rejects a non-string header value (boolean)", () => {
+    const broken = workflow({
+      headers: { "X-Flag": true as unknown as string },
+    });
+    const errors = validateWorkflow(broken);
+    expect(errors.some((e) => e.field === "headers")).toBe(true);
   });
 
   it("accumulates multiple errors (does not bail on first)", () => {

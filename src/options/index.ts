@@ -2,10 +2,11 @@
 //
 // Pure DOM rendering — no framework — keyed off two pieces of state:
 // the `Workflow[]` array and the `string[]` language priority. Every
-// mutation routes through `setWorkflows` / `setLanguagePriority` and
-// the page re-renders from the post-mutation state, so the UI is
-// always a reflection of `chrome.storage.local` (modulo the in-flight
-// edit form's local state).
+// workflow mutation routes through `setWorkflows`, language saves
+// route through `setPreferences`, and the page re-renders from the
+// post-mutation state, so the UI is always a reflection of
+// `chrome.storage.local` (modulo the in-flight edit form's local
+// state).
 //
 // Inline errors live next to the field they describe (SPEC §7.6); no
 // alert / chrome.notifications / console.error is used as a user-
@@ -82,10 +83,25 @@ async function bootstrap(): Promise<void> {
   // top-of-page warning so the user knows the load wasn't clean.
   let loadWarning: string | null = null;
   if (wfs.ok) {
-    const onlyValid = wfs.value.filter(isPlausibleWorkflow);
-    state.workflows = onlyValid;
-    if (onlyValid.length !== wfs.value.length) {
-      loadWarning = "Some stored workflows were malformed and have been hidden until you re-save settings.";
+    // Coerce recoverable shape drift (e.g. headers missing → {}, a
+    // string headers value that snuck in as a number → toString)
+    // BEFORE filtering. Only entries that still can't pass the
+    // shape check after coercion are dropped. This matches SPEC
+    // §7.4's intent: missing-but-optional fields should fill in
+    // safely; structurally broken entries are hidden.
+    const repaired: Workflow[] = [];
+    let droppedCount = 0;
+    for (const candidate of wfs.value as unknown[]) {
+      const repairedCandidate = repairWorkflow(candidate);
+      if (repairedCandidate === null) {
+        droppedCount += 1;
+      } else {
+        repaired.push(repairedCandidate);
+      }
+    }
+    state.workflows = repaired;
+    if (droppedCount > 0) {
+      loadWarning = `Some stored workflows (${droppedCount}) were malformed and have been hidden until you re-save settings.`;
     }
   } else {
     state.workflows = [];
@@ -110,26 +126,46 @@ async function bootstrap(): Promise<void> {
   render();
 }
 
-// Lightweight runtime check — does NOT enforce SPEC §7.4 (validateWorkflow
-// covers that on save). Just verifies the array element is the right
-// SHAPE so the UI can render it without crashing. Includes header
-// value-type check so non-string values can't sneak into the editor
-// and get round-tripped back to storage on save.
-function isPlausibleWorkflow(value: unknown): value is Workflow {
-  if (value === null || typeof value !== "object") return false;
+// Repair recoverable shape drift in a stored Workflow candidate.
+// Returns the repaired Workflow on success, or null when the
+// shape is too broken to fix (no id, name, url, promptTemplate,
+// or autoRun).
+//
+// Recoverable cases:
+//   - missing `headers` → default to `{}`
+//   - `headers` is null / array / non-object → default to `{}`
+//   - header values that aren't strings → coerced via `String(...)`
+//
+// Non-recoverable cases (return null):
+//   - the whole value isn't an object
+//   - id / name / url / promptTemplate isn't a string
+//   - autoRun isn't a boolean
+//
+// Callers (so far: only bootstrap) surface a single warning to the
+// user when any entry was dropped, so they know their stored state
+// isn't fully visible until they re-save.
+function repairWorkflow(value: unknown): Workflow | null {
+  if (value === null || typeof value !== "object") return null;
   const w = value as Record<string, unknown>;
-  if (typeof w.id !== "string") return false;
-  if (typeof w.name !== "string") return false;
-  if (typeof w.url !== "string") return false;
-  if (typeof w.promptTemplate !== "string") return false;
-  if (typeof w.autoRun !== "boolean") return false;
-  if (w.headers === null || typeof w.headers !== "object" || Array.isArray(w.headers)) {
-    return false;
+  if (typeof w.id !== "string") return null;
+  if (typeof w.name !== "string") return null;
+  if (typeof w.url !== "string") return null;
+  if (typeof w.promptTemplate !== "string") return null;
+  if (typeof w.autoRun !== "boolean") return null;
+  let headers: Record<string, string> = {};
+  if (w.headers !== null && typeof w.headers === "object" && !Array.isArray(w.headers)) {
+    for (const [k, v] of Object.entries(w.headers as Record<string, unknown>)) {
+      headers[k] = typeof v === "string" ? v : String(v);
+    }
   }
-  for (const v of Object.values(w.headers as Record<string, unknown>)) {
-    if (typeof v !== "string") return false;
-  }
-  return true;
+  return {
+    id: w.id,
+    name: w.name,
+    url: w.url,
+    promptTemplate: w.promptTemplate,
+    autoRun: w.autoRun,
+    headers,
+  };
 }
 
 function render(): void {
@@ -245,6 +281,10 @@ async function saveLanguages(): Promise<void> {
   }
   state.languagePriority = trimmed;
   state.languageError = null;
+  // A successful save also clears any stale top-of-page banner from
+  // a prior failed load — the user has just demonstrated that the
+  // write path works, so the warning is no longer useful.
+  state.saveError = null;
   render();
 }
 
