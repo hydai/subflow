@@ -5,12 +5,29 @@
 // is not maintained between calls.
 
 import type {
+  ExtractError,
+  ExtractedPlayerData,
   PromptVariables,
   SidebarState,
   SubtitleResult,
   Workflow,
   WorkflowResult,
 } from "./types";
+
+// Main-world content script → isolated content script → background:
+// the extractor read window.ytInitialPlayerResponse and produced
+// either typed data or a typed error. The isolated content script
+// forwards this unchanged via chrome.runtime.sendMessage because the
+// main-world script has no access to chrome.* APIs (#4).
+export interface PlayerDataExtractedMessage {
+  type: "subflow:player-data-extracted";
+  // The video URL at the moment of extraction, so the receiver can
+  // double-check the message belongs to the current navigation.
+  href: string;
+  result:
+    | { ok: true; data: ExtractedPlayerData }
+    | { ok: false; error: ExtractError };
+}
 
 // Content → background: ask for the subtitle for the current video.
 // The background owns the in-flight dedupe + cache (#7), so the
@@ -78,6 +95,7 @@ export interface SidebarStateMessage {
 }
 
 export type Message =
+  | PlayerDataExtractedMessage
   | RequestSubtitleMessage
   | SubtitleResultMessage
   | ExecuteWorkflowMessage
@@ -85,3 +103,8 @@ export type Message =
   | RefetchSubtitleMessage
   | VideoChangedMessage
   | SidebarStateMessage;
+
+// Constant used as the window.postMessage bridge tag between the
+// main-world and isolated content scripts. Picked specifically so it
+// is unlikely to collide with anything YouTube itself posts.
+export const PLAYER_DATA_POSTMESSAGE_TAG = "subflow:player-data-extracted";

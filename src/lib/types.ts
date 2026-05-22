@@ -33,6 +33,42 @@ export interface Workflow {
 }
 
 // --------------------------------------------------------------------
+// SPEC §6.1.1 — Extracted YouTube player data
+// --------------------------------------------------------------------
+
+export interface VideoDetails {
+  videoId: string;
+  // Optional metadata fields — when missing or wrong-typed the
+  // extractor returns `undefined` rather than throwing, so the
+  // prompt-replacement step (§7.3) can fall back to "leave the
+  // placeholder verbatim".
+  title?: string;
+  author?: string;
+  // YouTube delivers `lengthSeconds` as a numeric string; the extractor
+  // converts it to a non-negative integer or leaves it undefined when
+  // the value is missing or cannot be parsed.
+  lengthSeconds?: number;
+  isLive: boolean;
+  isUpcoming: boolean;
+}
+
+export interface ExtractedPlayerData {
+  videoDetails: VideoDetails;
+  // Empty array means YouTube exposed no caption tracks for this
+  // video. That is not an extraction failure — it's a §6.6 "no
+  // subtitles available" situation handled by #17.
+  captionTracks: CaptionTrack[];
+}
+
+export type ExtractError =
+  | { type: "MISSING_PLAYER_RESPONSE" }
+  | { type: "MALFORMED_PLAYER_RESPONSE"; reason: string };
+
+export type ExtractResult =
+  | { ok: true; data: ExtractedPlayerData }
+  | { ok: false; error: ExtractError };
+
+// --------------------------------------------------------------------
 // SPEC §7.1 — YouTube caption tracks
 // --------------------------------------------------------------------
 
