@@ -163,26 +163,30 @@ async function bootstrap(): Promise<void> {
 // Callers (so far: only bootstrap) surface a single warning to the
 // user when any entry was dropped, so they know their stored state
 // isn't fully visible until they re-save.
-// SPEC §7.4 specifies UUID v4 for workflow ids. The canonical form
-// is 8-4-4-4-12 hex digits with a "4" version nibble and a 8/9/a/b
-// variant nibble. We accept the format as written (case-insensitive)
-// without trying to validate the random bits — that's a property of
-// crypto.randomUUID and not something the loader can audit.
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
 function repairWorkflow(value: unknown): Workflow | null {
   if (value === null || typeof value !== "object") return null;
   const w = value as Record<string, unknown>;
-  // SPEC §7.4: id is a UUID v4. Drop entries whose id isn't UUID-v4
-  // shaped so downstream code (move / edit / delete by id) can rely
-  // on each row being uniquely addressable and not colliding with
-  // hand-typed strings.
-  if (typeof w.id !== "string" || !UUID_V4_RE.test(w.id)) return null;
+  // SPEC §7.4 says new ids should be UUID v4. We DON'T enforce that
+  // shape at load time, though — a stricter check would hide
+  // pre-existing workflows from older versions of Subflow (or from
+  // any future bulk-import path that uses its own id scheme),
+  // which would be data loss on upgrade. The id only needs to be a
+  // non-empty string so downstream code (move / edit / delete by
+  // id) can address each row. New ids issued by the editor still
+  // come from crypto.randomUUID() and ARE UUID v4 — the SPEC
+  // requirement is preserved for creation, just not enforced as a
+  // load-time filter.
+  if (typeof w.id !== "string" || w.id.length === 0) return null;
   if (typeof w.name !== "string") return null;
   if (typeof w.url !== "string") return null;
   if (typeof w.promptTemplate !== "string") return null;
   if (typeof w.autoRun !== "boolean") return null;
-  let headers: Record<string, string> = {};
+  // Object.create(null) avoids prototype pollution if the stored
+  // headers contain a key like "__proto__" / "constructor"; on a
+  // plain `{}`, assigning headers["__proto__"] = "x" would mutate
+  // Object.prototype. The Workflow type tolerates this because
+  // it's a Record, not a class instance.
+  const headers = Object.create(null) as Record<string, string>;
   if (w.headers !== null && typeof w.headers === "object" && !Array.isArray(w.headers)) {
     for (const [k, v] of Object.entries(w.headers as Record<string, unknown>)) {
       headers[k] = typeof v === "string" ? v : String(v);
@@ -567,8 +571,11 @@ function renderEditForm(
 function collapseHeaders(rows: HeaderRow[]): Record<string, string> {
   // Skip blank-name rows entirely (the user is still typing); last
   // write wins for duplicates, which is the only sensible thing we
-  // can do once the user has committed to ambiguous data.
-  const out: Record<string, string> = {};
+  // can do once the user has committed to ambiguous data. Use
+  // Object.create(null) so a user-entered key like "__proto__"
+  // becomes a regular property assignment instead of mutating
+  // Object.prototype.
+  const out = Object.create(null) as Record<string, string>;
   for (const row of rows) {
     const key = row.key.trim();
     if (key.length === 0) continue;
