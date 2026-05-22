@@ -83,15 +83,19 @@ async function bootstrap(): Promise<void> {
   // top-of-page warning so the user knows the load wasn't clean.
   let loadWarning: string | null = null;
   if (wfs.ok) {
-    // Coerce recoverable shape drift (e.g. headers missing → {}, a
-    // string headers value that snuck in as a number → toString)
-    // BEFORE filtering. Only entries that still can't pass the
-    // shape check after coercion are dropped. This matches SPEC
-    // §7.4's intent: missing-but-optional fields should fill in
-    // safely; structurally broken entries are hidden.
+    // Defensively unwrap. getWorkflows()'s type says Workflow[] but
+    // chrome.storage.local can hand back anything a user / older
+    // schema put there (object, string, missing field, …). Bail to
+    // [] if it's not even an array, so the for…of can't throw a
+    // non-iterable error or iterate string characters.
+    const candidates = Array.isArray(wfs.value) ? (wfs.value as unknown[]) : [];
+    if (!Array.isArray(wfs.value)) {
+      loadWarning =
+        "Stored workflows were not an array; resetting to empty list.";
+    }
     const repaired: Workflow[] = [];
     let droppedCount = 0;
-    for (const candidate of wfs.value as unknown[]) {
+    for (const candidate of candidates) {
       const repairedCandidate = repairWorkflow(candidate);
       if (repairedCandidate === null) {
         droppedCount += 1;
@@ -107,12 +111,22 @@ async function bootstrap(): Promise<void> {
     state.workflows = [];
   }
   if (prefs.ok) {
-    const langs = prefs.value.languagePriority;
-    if (Array.isArray(langs) && langs.every((s) => typeof s === "string")) {
-      state.languagePriority = langs;
+    // prefs.value's compile-time type is Preferences, but stored
+    // data could be a string / null / etc. Guard each access.
+    const prefsValue = prefs.value as unknown;
+    if (prefsValue !== null && typeof prefsValue === "object") {
+      const langs = (prefsValue as { languagePriority?: unknown }).languagePriority;
+      if (Array.isArray(langs) && langs.every((s) => typeof s === "string")) {
+        state.languagePriority = langs as string[];
+      } else {
+        state.languagePriority = [];
+        loadWarning =
+          loadWarning ?? "Stored language priority was malformed; reset to empty.";
+      }
     } else {
       state.languagePriority = [];
-      loadWarning = loadWarning ?? "Stored language priority was malformed; reset to empty.";
+      loadWarning =
+        loadWarning ?? "Stored preferences were malformed; reset to defaults.";
     }
   } else {
     state.languagePriority = [];
@@ -281,10 +295,13 @@ async function saveLanguages(): Promise<void> {
   }
   state.languagePriority = trimmed;
   state.languageError = null;
-  // A successful save also clears any stale top-of-page banner from
-  // a prior failed load — the user has just demonstrated that the
-  // write path works, so the warning is no longer useful.
-  state.saveError = null;
+  // Don't clear state.saveError unconditionally: the saveError
+  // banner can carry a workflow-related warning (e.g. "Some stored
+  // workflows were malformed") which is NOT addressed by a
+  // languages-only save. Saving languages successfully only
+  // demonstrates the preferences write path; it tells the user
+  // nothing about whether the workflows write would succeed. The
+  // workflow-write path clears the banner on its own success.
   render();
 }
 
@@ -314,7 +331,7 @@ function renderWorkflowsList(): HTMLElement {
   return section;
 }
 
-function renderWorkflowRow(w: Workflow, idx: number): HTMLElement {
+function renderWorkflowRow(w: Workflow, _idx: number): HTMLElement {
   const li = el("li");
   const meta = el("div", { class: "meta" });
   const nameSpan = el("div", { class: "name" }, w.name);
@@ -324,10 +341,10 @@ function renderWorkflowRow(w: Workflow, idx: number): HTMLElement {
   const urlDiv = el("div", { class: "url" }, w.url);
   meta.append(nameSpan, urlDiv);
   const up = iconButton("↑", `Move workflow "${w.name}" up`, () =>
-    moveWorkflow(idx, idx - 1),
+    moveWorkflow(w, "up"),
   );
   const down = iconButton("↓", `Move workflow "${w.name}" down`, () =>
-    moveWorkflow(idx, idx + 1),
+    moveWorkflow(w, "down"),
   );
   const edit = button("Edit", () => startEdit(w));
   const del = button("Delete", () => deleteWorkflow(w), "danger");
@@ -335,16 +352,20 @@ function renderWorkflowRow(w: Workflow, idx: number): HTMLElement {
   return li;
 }
 
-function moveWorkflow(from: number, to: number): void {
-  // Base each successive mutation on the most recent PENDING value
-  // rather than the still-committed `state.workflows`. Otherwise
-  // rapid clicks would each compute their `next` from the original
-  // ordering and "race" the slower writes back to old positions.
-  // `pendingNext` reflects the latest unsaved-but-being-saved array.
+// Reorder/delete derive `next` from `pendingNext ?? state.workflows`
+// AND `(from, to)` is provided as workflow IDs rather than as
+// indices, because the rendered list could be one click out of date
+// with `pendingNext` after rapid clicks. Index-based mutations on a
+// stale view of the list would shuffle the wrong rows. ID-based
+// lookups always identify the right row in the latest pending list.
+function moveWorkflow(workflow: Workflow, direction: "up" | "down"): void {
   const base = pendingNext ?? state.workflows;
+  const idx = base.findIndex((w) => w.id === workflow.id);
+  if (idx === -1) return;
+  const to = direction === "up" ? idx - 1 : idx + 1;
   if (to < 0 || to >= base.length) return;
   const next = [...base];
-  const [item] = next.splice(from, 1);
+  const [item] = next.splice(idx, 1);
   next.splice(to, 0, item!);
   void enqueuePersist(next);
 }
@@ -616,11 +637,26 @@ function field(
   // Associate the visible <label> with the input so screen readers
   // announce the label when the input takes focus.
   wrap.appendChild(el("label", { for: inputId }, label));
-  if (hint !== undefined) wrap.appendChild(el("p", { class: "muted" }, hint));
+  const hintId = `${inputId}-hint`;
+  if (hint !== undefined) {
+    const hintEl = el("p", { class: "muted", id: hintId }, hint);
+    wrap.appendChild(hintEl);
+    input.setAttribute("aria-describedby", hintId);
+  }
   wrap.appendChild(input);
   const err = errorFor(validationField);
   if (err !== null) {
+    const errId = `${inputId}-err`;
+    err.id = errId;
     input.setAttribute("aria-invalid", "true");
+    // Append aria-describedby so the error AND the hint are both
+    // announced. Order: existing describedby (hint) first, then the
+    // error, so the error is the last thing heard.
+    const prior = input.getAttribute("aria-describedby");
+    input.setAttribute(
+      "aria-describedby",
+      prior === null ? errId : `${prior} ${errId}`,
+    );
     wrap.appendChild(err);
   }
   return wrap;
