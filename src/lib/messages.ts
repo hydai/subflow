@@ -62,6 +62,14 @@ export interface ExecuteWorkflowMessage {
   type: "subflow:execute-workflow";
   workflow: Workflow;
   variables: PromptVariables;
+  // `"manual"` → no dedup, always runs (SPEC §6.5).
+  // `"auto"`   → background dedups by (tabId, videoId, workflowId)
+  //              per SPEC §6.5; if the triple has already fired in
+  //              this tab, the response carries `result: null` and
+  //              `suppressed: true`, and no workflow request is
+  //              issued. The caller still gets a settled promise so
+  //              its dispatch state machine can move on.
+  trigger: "manual" | "auto";
   // Used to associate the response with the right sidebar entry and
   // to support SPA-switch cancellation (#16).
   videoId: string;

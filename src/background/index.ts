@@ -15,17 +15,22 @@ import { PLAYER_DATA_POSTMESSAGE_TAG } from "@/lib/messages";
 import { fetchSubtitleXml } from "./fetch-subtitle";
 import { SubtitleService } from "./subtitle-service";
 import type { PlayerDataState } from "./subtitle-service";
+import { WorkflowOrchestrator } from "./workflow-orchestrator";
+import type { PromptVariables, Workflow } from "@/lib/types";
 
 const subtitles = new SubtitleService({ fetchSubtitleXml });
+const orchestrator = new WorkflowOrchestrator();
 
 chrome.action.onClicked.addListener(() => {
   chrome.runtime.openOptionsPage();
 });
 
-// Drop the tab's entire SubtitleService state on close so the
-// in-memory cache cannot outlive the tab it was scoped to (§6.2).
+// Drop the tab's entire state on close (subtitle cache, autoRun
+// history, and any in-flight workflow requests) so nothing outlives
+// the tab it was scoped to (§6.2, §6.5).
 chrome.tabs.onRemoved.addListener((tabId) => {
   subtitles.invalidateTab(tabId);
+  orchestrator.forgetTab(tabId);
 });
 
 // Narrow the inbound value just enough to read its discriminator
@@ -76,6 +81,15 @@ interface RefetchSubtitlePayload {
 interface VideoChangedPayload {
   type: "subflow:video-changed";
   videoId: string;
+}
+
+interface ExecuteWorkflowPayload {
+  type: "subflow:execute-workflow";
+  workflow: Workflow;
+  variables: PromptVariables;
+  trigger: "manual" | "auto";
+  videoId: string;
+  requestId: string;
 }
 
 function isPlayerDataPayload(value: unknown): value is PlayerDataPayload {
@@ -195,6 +209,92 @@ function isVideoChangedPayload(value: unknown): value is VideoChangedPayload {
   );
 }
 
+function isWorkflow(value: unknown): value is Workflow {
+  if (value === null || typeof value !== "object") return false;
+  const w = value as Record<string, unknown>;
+  if (typeof w.id !== "string" || w.id.length === 0) return false;
+  if (typeof w.name !== "string" || w.name.length === 0) return false;
+  // Parse via URL so whitespace, newlines, or malformed strings get
+  // rejected — `startsWith("https://")` alone would accept
+  // `"https:// evil.example/path\n"` and similar nonsense. We
+  // require an actual `https:` scheme on a non-empty hostname.
+  if (typeof w.url !== "string") return false;
+  try {
+    const parsed = new URL(w.url);
+    if (parsed.protocol !== "https:") return false;
+    if (parsed.hostname.length === 0) return false;
+  } catch {
+    return false;
+  }
+  // SPEC §7.4: promptTemplate is required AND non-empty. An empty
+  // template would POST `{"prompt": ""}`, which is a bug, not a
+  // configuration option.
+  if (typeof w.promptTemplate !== "string" || w.promptTemplate.length === 0) {
+    return false;
+  }
+  if (typeof w.autoRun !== "boolean") return false;
+  // Arrays satisfy `typeof === "object"` but their numeric-string
+  // keys would be spread into request headers as `"0"`, `"1"`, …,
+  // which doesn't match the `Record<string, string>` contract.
+  // Reject them explicitly.
+  if (
+    w.headers === null ||
+    typeof w.headers !== "object" ||
+    Array.isArray(w.headers)
+  ) {
+    return false;
+  }
+  const headers = w.headers as Record<string, unknown>;
+  for (const key of Object.keys(headers)) {
+    if (typeof headers[key] !== "string") return false;
+    // Storage-time validation (#9 / #10) rejects user-supplied
+    // Content-Type; the runner sets it. Reject defensively here too.
+    if (key.toLowerCase() === "content-type") return false;
+  }
+  return true;
+}
+
+function isPromptVariables(value: unknown): value is PromptVariables {
+  if (value === null || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.transcript !== "string") return false;
+  if (typeof v.transcript_with_timestamps !== "string") return false;
+  if (typeof v.video_id !== "string") return false;
+  if (typeof v.video_url !== "string") return false;
+  if (typeof v.language !== "string") return false;
+  if (v.title !== undefined && typeof v.title !== "string") return false;
+  if (v.channel !== undefined && typeof v.channel !== "string") return false;
+  if (
+    v.duration_seconds !== undefined &&
+    (typeof v.duration_seconds !== "number" ||
+      !Number.isInteger(v.duration_seconds) ||
+      v.duration_seconds < 0)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isExecuteWorkflowPayload(value: unknown): value is ExecuteWorkflowPayload {
+  if (value === null || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  if (v.type !== "subflow:execute-workflow") return false;
+  if (typeof v.videoId !== "string" || v.videoId.length === 0) return false;
+  if (typeof v.requestId !== "string" || v.requestId.length === 0) return false;
+  if (v.trigger !== "manual" && v.trigger !== "auto") return false;
+  if (!isWorkflow(v.workflow)) return false;
+  if (!isPromptVariables(v.variables)) return false;
+  // Cross-field consistency: the videoId on the envelope MUST match
+  // the videoId carried in variables. A mismatch (sender bug or
+  // forged message) would mean autoRun dedup keys against the
+  // envelope's videoId while the prompt body claims a different
+  // video — making cancellation, dedup, and the rendered result
+  // ambiguous. Reject so the sidebar can never receive a result
+  // whose prompt-vars disagree with its own envelope.
+  if (v.videoId !== v.variables.video_id) return false;
+  return true;
+}
+
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (!hasSubflowType(message)) return false;
   if (!isFromYouTubeTab(sender)) return false;
@@ -241,8 +341,69 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     case "subflow:video-changed":
       if (!isVideoChangedPayload(message)) return false;
       subtitles.changeVideo(tabId, message.videoId);
+      // SPEC §6.7: SPA navigation aborts all in-flight workflow
+      // requests for the previous video. Their results MUST NOT
+      // appear in the sidebar. The orchestrator's signal makes
+      // those requests resolve with outcome: "aborted" and the
+      // execute-workflow handler below suppresses that variant.
+      orchestrator.abortInFlight(tabId);
       sendResponse({ ack: true });
       return false;
+
+    case "subflow:execute-workflow":
+      if (!isExecuteWorkflowPayload(message)) return false;
+      {
+        const dispatch =
+          message.trigger === "auto"
+            ? orchestrator.runAutoRun(
+                tabId,
+                message.videoId,
+                message.workflow,
+                message.variables,
+              )
+            : orchestrator.runManual(tabId, message.workflow, message.variables);
+        dispatch
+          .then((result) => {
+            // autoRun dedup: a null result means "this (tabId,
+            // videoId, workflowId) has already fired in this tab".
+            // Still send a response so the sender's promise settles,
+            // but mark it suppressed so the sidebar doesn't add an
+            // entry to the result list.
+            if (result === null) {
+              sendResponse({
+                videoId: message.videoId,
+                requestId: message.requestId,
+                result: null,
+                suppressed: true,
+              });
+              return;
+            }
+            // SPEC §6.7: aborted requests do not produce sidebar
+            // entries.
+            sendResponse({
+              videoId: message.videoId,
+              requestId: message.requestId,
+              result,
+              suppressed: result.outcome === "aborted",
+            });
+          })
+          .catch((err: unknown) => {
+            sendResponse({
+              videoId: message.videoId,
+              requestId: message.requestId,
+              result: {
+                workflowId: message.workflow.id,
+                workflowName: message.workflow.name,
+                outcome: "network-error",
+                body: err instanceof Error ? err.message : String(err),
+                timestamp: Date.now(),
+              },
+              suppressed: false,
+            });
+          });
+      }
+      // Keep the message channel open for the async sendResponse.
+      return true;
 
     default:
       return false;
