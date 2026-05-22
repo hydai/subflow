@@ -18,7 +18,7 @@ All extension code runs inside your browser. Updates come from the Chrome Web St
 
 - **Workflow definitions** — name, URL, prompt template, headers (typically including your API key), and the `autoRun` flag. Stored in `chrome.storage.local`.
 - **Language preference** — your ordered list of BCP-47 language codes. Stored in `chrome.storage.local`.
-- **Per-tab in-memory caches** — the parsed subtitle for the videos you've viewed in that tab, plus a recent-results list of up to five workflow outputs. Lives only for the lifetime of the tab; closing it discards everything.
+- **Per-tab in-memory caches** — for each YouTube tab Subflow keeps three pieces of state in the background service worker's memory: (a) the parsed subtitle for any video viewed in that tab, (b) the latest extracted player data (video title, channel, length, caption track list and the corresponding `baseUrl`s), and (c) a recent-results list of up to five workflow outputs. All three live only for the lifetime of the tab; closing the tab discards everything via `chrome.tabs.onRemoved`. The service worker itself can be torn down by Chrome at any time when idle, which also clears this state.
 
 `chrome.storage.local` is sandboxed per-extension on your device. Subflow does not enable Chrome Sync for this storage, so settings do not propagate to other devices or other Chrome profiles you sign into.
 
