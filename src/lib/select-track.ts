@@ -83,7 +83,17 @@ function findTranslationMatch(
   if (chosenIndex === -1) return null;
   const source = tracks[chosenIndex]!;
 
-  const url = new URL(source.baseUrl);
+  // YouTube delivers absolute https://… URLs, but `extractPlayerData`
+  // only verifies that `baseUrl` is a string. If the value is malformed
+  // (site change, unexpected input) `new URL` would throw and crash
+  // selection. Skip translation derivation for this track in that case
+  // — the outer loop falls through to the next preferred language.
+  let url: URL;
+  try {
+    url = new URL(source.baseUrl);
+  } catch {
+    return null;
+  }
   url.searchParams.set("tlang", preferredLanguage);
 
   return {

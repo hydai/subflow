@@ -111,17 +111,17 @@ describe("selectTrack (SPEC §6.1.2 + §6.1.3)", () => {
     expect(url.searchParams.get("lang")).toBe("en");
   });
 
-  it("prefers a direct match in a later priority over a translation in an earlier priority", () => {
+  it("commits to a translation under the first priority instead of falling through to a later direct match", () => {
     const tracks = [
       track({ baseUrl: "https://en", languageCode: "en", isTranslatable: true }),
       track({ baseUrl: "https://ja", languageCode: "ja", isTranslatable: false }),
     ];
+    // Outer-priority semantics: each preferred language is decided
+    // independently. "fr" has no direct match but a translatable
+    // track exists, so "fr" produces a translation result — and we
+    // stop. The "ja" direct match in the second slot never gets a
+    // chance because the loop already returned.
     const result = selectTrack(tracks, ["fr", "ja"]);
-    // ja direct match wins because we exhaust fr (no direct, but translatable
-    // available — so we DO use the translation from fr).
-    // Actually, the spec says: each priority is decided independently.
-    // For "fr": no direct match, but translatable exists -> translation to fr.
-    // So result should be tlang=fr translation, not direct ja.
     expect(result?.source).toBe("translation");
     expect(result?.languageCode).toBe("fr");
   });
