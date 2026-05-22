@@ -1,35 +1,31 @@
 // Subflow content script entry (isolated world).
-// Real behavior is delivered by later issues (e.g. #11, #12).
+//
+// Two responsibilities live here:
+//
+//   1. Bridge specific `window.postMessage` envelopes from the
+//      main-world script (#4) into chrome.runtime.sendMessage, since
+//      the main world has no access to chrome.* APIs.
+//
+//   2. SPEC §6.4 sidebar lifecycle (#11): inject a Shadow-DOM-isolated
+//      root element when the page is a YouTube watch URL, remove it
+//      when the user navigates elsewhere, and on SPA navigation to a
+//      different videoId notify the background so it can clean up
+//      cache entries that no longer belong.
 //
 // content.js is loaded by Chrome as a classic script (the
 // `content_scripts` entry in manifest.json does not set `"type":
-// "module"`), so the emitted bundle must contain no ESM module syntax
-// — neither `import` nor `export`. Today this script's only job is to
-// bridge specific `window.postMessage` envelopes from the main-world
-// content script (#4) into chrome.runtime.sendMessage, since the main
-// world has no access to chrome.* APIs.
-//
-// To keep the bundle import-free we deliberately do NOT import shared
-// constants from `@/lib/messages` here: doing so would force Rollup
-// to emit a shared chunk that the classic content script could not
-// load. The expected postMessage tags are hardcoded below; the test
-// in `tests/content-bridge.test.ts` keeps them in sync with the
-// canonical constants in `src/lib/messages.ts`. Any page-world script
-// can call `window.postMessage`, so the whitelist keeps the bridge
-// narrow — only known tags get forwarded; everything else is dropped.
+// "module"`), so the emitted bundle must contain no ESM module syntax.
+// We deliberately keep the file import-graph tiny so Rollup inlines
+// everything into a single self-contained bundle: parseWatchPageUrl is
+// the only consumer of @/lib/watch-page, so it's inlined; no message-
+// tag constants are imported (the whitelist is duplicated inline and
+// kept in sync by tests/content-bridge.test.ts).
 
-// The bare `export {}` at the bottom switches TypeScript from
-// "script" mode to "module" mode for this file, so the constants and
-// helpers below stay file-local rather than entering the global TS
-// scope. Rollup strips the empty re-export from the emitted bundle
-// (no semantic effect), so the classic-script load is unaffected.
+import { parseWatchPageUrl } from "@/lib/watch-page";
+
 const PLAYER_DATA_TAG = "subflow:player-data-extracted";
+const SIDEBAR_ROOT_ID = "subflow-sidebar-root";
 
-// Minimal shape check for each allowed tag. Any page-world script can
-// call window.postMessage with a valid tag, so forwarding the raw
-// payload through to chrome.runtime would let a hostile page DoS the
-// background or inject garbage result shapes. Each tag has a small
-// inline validator that the bridge consults before forwarding.
 function isPlayerDataPayload(value: unknown): boolean {
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
@@ -48,14 +44,8 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   const candidate = data as { type?: unknown };
   if (typeof candidate.type !== "string") return;
 
-  // Each allowed tag has its own minimal validator. Adding a new tag
-  // here requires adding both the tag and a validator branch, which
-  // forces a deliberate code review.
   if (candidate.type === PLAYER_DATA_TAG) {
     if (!isPlayerDataPayload(data)) return;
-    // Forward only the fields the contract declares, in case the
-    // page script attached extra keys. A page-controlled payload
-    // never lands in chrome.runtime.sendMessage unchanged.
     const d = data as { href: string; result: unknown };
     void chrome.runtime.sendMessage({
       type: PLAYER_DATA_TAG,
@@ -66,4 +56,130 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   }
 });
 
-export {};
+// --------------------------------------------------------------------
+// Sidebar lifecycle (#11)
+// --------------------------------------------------------------------
+
+// Module-scoped: survives `yt-navigate-finish` event fires so we can
+// distinguish "first injection on this page" from "SPA-switched to a
+// different video".
+//
+// `lastVideoId` persists ACROSS unmount events. Leaving /watch and
+// later coming back to a different video is semantically the same as
+// SPA-navigating from videoA → videoB: the background still needs a
+// `subflow:video-changed` so SubtitleService.changeVideo can prune the
+// old video's cache entries. Resetting on unmount would suppress that
+// message and let stale cache accumulate across navigation cycles.
+let lastVideoId: string | null = null;
+let sidebarRoot: HTMLElement | null = null;
+
+function syncSidebar(): void {
+  const info = parseWatchPageUrl(window.location.href);
+  if (info === null) {
+    // Off the watch route — remove the sidebar but keep `lastVideoId`
+    // so a return to /watch with a different id still triggers
+    // video-changed.
+    if (sidebarRoot !== null) {
+      sidebarRoot.remove();
+      sidebarRoot = null;
+      sidebarShadow = null;
+    }
+    return;
+  }
+
+  if (sidebarRoot === null) {
+    const { host, shadow } = createSidebarRoot();
+    sidebarRoot = host;
+    sidebarShadow = shadow;
+    document.body.appendChild(sidebarRoot);
+    renderSidebar(sidebarShadow);
+  }
+
+  if (info.videoId !== lastVideoId) {
+    const isInitialObservation = lastVideoId === null;
+    lastVideoId = info.videoId;
+
+    if (!isInitialObservation) {
+      // SPA navigation between two videos. Tell the background so
+      // SubtitleService.changeVideo (#7) can prune cache entries for
+      // the previous video and reset its playerData. Suppressed on
+      // the very FIRST observation in the tab so that freshly-
+      // extracted player data from the main-world script's initial
+      // run can't be wiped by a racing changeVideo if the two
+      // messages cross — SubtitleService.changeVideo is now also
+      // idempotent on matching videoIds as a belt-and-suspenders.
+      void chrome.runtime.sendMessage({
+        type: "subflow:video-changed",
+        videoId: info.videoId,
+      });
+    }
+
+    // Re-extraction request runs on EVERY videoId change, including
+    // the first observation. Two reasons:
+    //   - the tab could have loaded on a non-watch URL where the
+    //     main-world script's document_idle run bailed early; SPA
+    //     navigation to the first /watch then has no player data
+    //     until we ask for one.
+    //   - SPA navigation between two watch URLs never re-injects the
+    //     main-world script, but ytInitialPlayerResponse on the page
+    //     is updated for the new video. The re-extraction picks up
+    //     the new value.
+    window.postMessage(
+      { type: "subflow:request-reextraction" },
+      window.location.origin,
+    );
+  }
+}
+
+// Closed-mode ShadowRoot reference. With `mode: "closed"`,
+// `host.shadowRoot` returns null to EVERY caller — including this
+// module — so we must capture the value returned by attachShadow
+// ourselves. #12's renderer reads this via the renderSidebar() stub
+// below.
+let sidebarShadow: ShadowRoot | null = null;
+
+interface SidebarRoot {
+  host: HTMLElement;
+  shadow: ShadowRoot;
+}
+
+function createSidebarRoot(): SidebarRoot {
+  const host = document.createElement("div");
+  host.id = SIDEBAR_ROOT_ID;
+  // `mode: "closed"` keeps the shadow root invisible to page scripts:
+  // they cannot reach into `subflow-sidebar-root.shadowRoot` (it's
+  // null) to read user-typed workflow names, trigger button clicks,
+  // or scrape rendered AI responses.
+  const shadow = host.attachShadow({ mode: "closed" });
+  // Position the host fixed at the top-right corner — actual UI lands
+  // in #12 once it has tests.
+  host.style.position = "fixed";
+  host.style.top = "0";
+  host.style.right = "0";
+  host.style.zIndex = "2147483647";
+  return { host, shadow };
+}
+
+// Stub renderer — #12 replaces this with real DOM construction. Lives
+// here as a stub so the closed-mode ShadowRoot reference has a
+// concrete consumer in this module (and #12's wire-up is a single
+// function-body edit rather than a structural refactor).
+function renderSidebar(shadow: ShadowRoot | null): void {
+  if (shadow === null) return;
+}
+
+// First sync at document_idle — manifest's `run_at` already covers
+// "DOM ready", so the body element exists.
+syncSidebar();
+
+// YouTube emits this on every SPA navigation finish; observing it
+// directly is much cheaper than polling.
+document.addEventListener("yt-navigate-finish", syncSidebar);
+
+// Browser-level fallback in case YouTube changes their event name.
+// `popstate` covers back / forward navigation. We deliberately do NOT
+// patch History.pushState or run a polling loop here — the
+// `yt-navigate-finish` listener above already fires on every YouTube
+// SPA transition (including ones triggered by pushState), so adding
+// a polling fallback would be redundant noise.
+window.addEventListener("popstate", syncSidebar);

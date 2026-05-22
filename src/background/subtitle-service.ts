@@ -190,17 +190,32 @@ export class SubtitleService {
   }
 
   // SPA-navigation cleanup. Drop cache entries that do not belong to
-  // the new video, and reset the cached player data because the
-  // content script will re-extract for the new page. The new video's
-  // own cache entries (if any from a prior visit in this tab) are
-  // kept so a back-navigation re-uses them. Also evict in-flight
-  // entries for the previous video and bump the epoch so a fetch that
-  // was running for the previous video can't write a stale entry
-  // after the SPA switch.
+  // the new video and (only when needed) reset the cached player data
+  // so the content script's re-extraction lands cleanly. The new
+  // video's own cache entries (if any from a prior visit in this
+  // tab) are kept so a back-navigation re-uses them. Also evict
+  // in-flight entries for the previous video and bump the epoch so a
+  // fetch that was running for the previous video can't write a
+  // stale entry after the SPA switch.
+  //
+  // Idempotency: the content-script bridge sends `video-changed` and
+  // a re-extraction request on separate channels (chrome.runtime vs.
+  // window.postMessage), so the re-extracted player data may arrive
+  // before this call. If the recorded playerData is ALREADY for the
+  // new videoId, we leave it in place; otherwise we clear it so the
+  // pending re-extraction can replace it without racing.
   changeVideo(tabId: number, newVideoId: string): void {
     const state = this.tabs.get(tabId);
     if (state === undefined) return;
-    state.playerData = null;
+
+    const recordedVideoId =
+      state.playerData?.ok === true
+        ? state.playerData.data.videoDetails.videoId
+        : null;
+    if (recordedVideoId !== newVideoId) {
+      state.playerData = null;
+    }
+
     const prefix = `${newVideoId}|`;
     for (const key of state.subtitleCache.keys()) {
       if (!key.startsWith(prefix)) state.subtitleCache.delete(key);

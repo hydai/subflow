@@ -29,18 +29,14 @@ declare global {
 // would force Rollup to emit a shared chunk and break the classic-
 // script load. Tests assert the two stay in sync.
 const POST_MESSAGE_TAG = "subflow:player-data-extracted" as const;
+// Re-extraction request from the isolated-world bridge (#11). SPA
+// navigation does not re-inject this script but YouTube updates
+// `ytInitialPlayerResponse` for the new video, so we listen for the
+// request and re-run extraction.
+const REEXTRACT_REQUEST_TAG = "subflow:request-reextraction" as const;
 
-// Watch-page guard: the manifest matches all of www.youtube.com/*,
-// but `ytInitialPlayerResponse` is only populated on the watch route
-// (SPEC §5.1.1 / §6.1). Running extraction on /, /shorts/*, /channel/*
-// etc. just emits a guaranteed MISSING_PLAYER_RESPONSE error and
-// spams the bridge with results the rest of the extension has no use
-// for, so skip the postMessage entirely on those routes.
-if (
-  typeof window !== "undefined" &&
-  typeof window.postMessage === "function" &&
-  window.location.pathname === "/watch"
-) {
+function postExtraction(): void {
+  if (window.location.pathname !== "/watch") return;
   const result = extractPlayerData(window.ytInitialPlayerResponse);
   window.postMessage(
     {
@@ -50,4 +46,20 @@ if (
     },
     window.location.origin,
   );
+}
+
+if (typeof window !== "undefined" && typeof window.postMessage === "function") {
+  // Initial extraction at document_idle.
+  postExtraction();
+
+  // Listen for re-extraction requests posted by the isolated content
+  // script on SPA navigation. Same-window, same-origin only.
+  window.addEventListener("message", (event: MessageEvent<unknown>) => {
+    if (event.source !== window) return;
+    if (event.origin !== window.location.origin) return;
+    const data = event.data;
+    if (data === null || typeof data !== "object") return;
+    if ((data as { type?: unknown }).type !== REEXTRACT_REQUEST_TAG) return;
+    postExtraction();
+  });
 }
