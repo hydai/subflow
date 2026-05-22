@@ -5,12 +5,36 @@
 // is not maintained between calls.
 
 import type {
+  ExtractResult,
   PromptVariables,
   SidebarState,
   SubtitleResult,
   Workflow,
   WorkflowResult,
 } from "./types";
+
+// Constant used as the window.postMessage bridge tag between the
+// main-world and isolated content scripts. Declared above the
+// message-variant types so each variant's `type` field can be linked
+// to it via `typeof` rather than repeating a string literal that
+// could silently drift.
+export const PLAYER_DATA_POSTMESSAGE_TAG = "subflow:player-data-extracted" as const;
+
+// Main-world content script → isolated content script → background:
+// the extractor read window.ytInitialPlayerResponse and produced
+// either typed data or a typed error. The isolated content script
+// forwards this unchanged via chrome.runtime.sendMessage because the
+// main-world script has no access to chrome.* APIs (#4).
+export interface PlayerDataExtractedMessage {
+  type: typeof PLAYER_DATA_POSTMESSAGE_TAG;
+  // The video URL at the moment of extraction, so the receiver can
+  // double-check the message belongs to the current navigation.
+  href: string;
+  // Mirrors the extractor's return type so any future contract change
+  // (new failure variants, additional fields) propagates here without
+  // a parallel edit.
+  result: ExtractResult;
+}
 
 // Content → background: ask for the subtitle for the current video.
 // The background owns the in-flight dedupe + cache (#7), so the
@@ -78,6 +102,7 @@ export interface SidebarStateMessage {
 }
 
 export type Message =
+  | PlayerDataExtractedMessage
   | RequestSubtitleMessage
   | SubtitleResultMessage
   | ExecuteWorkflowMessage

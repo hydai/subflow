@@ -32,6 +32,7 @@ export default defineConfig({
       input: {
         background: resolve(__dirname, "src/background/index.ts"),
         content: resolve(__dirname, "src/content/index.ts"),
+        "content-main": resolve(__dirname, "src/content/main-world.ts"),
         sidebar: resolve(__dirname, "src/sidebar/index.ts"),
         options: resolve(__dirname, "options.html"),
       },

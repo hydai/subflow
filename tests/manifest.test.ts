@@ -10,6 +10,16 @@ const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<string
 
 const PROHIBITED_PERMISSIONS = ["tabs", "cookies", "<all_urls>", "history", "downloads"];
 
+function findContentScript(
+  scripts: Array<Record<string, unknown>>,
+  jsEntry: string,
+): Record<string, unknown> | undefined {
+  return scripts.find((s) => {
+    const js = s.js;
+    return Array.isArray(js) && js.length === 1 && js[0] === jsEntry;
+  });
+}
+
 describe("public/manifest.json (SPEC §7.5)", () => {
   it("declares Manifest V3", () => {
     expect(manifest.manifest_version).toBe(3);
@@ -45,13 +55,25 @@ describe("public/manifest.json (SPEC §7.5)", () => {
     expect(manifest).toHaveProperty("background.service_worker", "background.js");
   });
 
-  it("declares a content script for the entire YouTube domain at document_idle", () => {
+  it("declares the isolated content script for the entire YouTube domain at document_idle", () => {
     const contentScripts = manifest.content_scripts as Array<Record<string, unknown>>;
-    expect(contentScripts).toHaveLength(1);
-    const first = contentScripts[0]!;
-    expect(first.matches).toEqual(["https://www.youtube.com/*"]);
-    expect(first.js).toEqual(["content.js"]);
-    expect(first.run_at).toBe("document_idle");
+    expect(contentScripts).toHaveLength(2);
+    const isolated = findContentScript(contentScripts, "content.js");
+    expect(isolated).toBeDefined();
+    expect(isolated!.matches).toEqual(["https://www.youtube.com/*"]);
+    expect(isolated!.run_at).toBe("document_idle");
+    // The isolated entry intentionally has no `world` field so it
+    // defaults to ISOLATED and keeps chrome.* access.
+    expect(isolated).not.toHaveProperty("world");
+  });
+
+  it("declares the main-world content script so it can read window.ytInitialPlayerResponse (SPEC §6.1.1)", () => {
+    const contentScripts = manifest.content_scripts as Array<Record<string, unknown>>;
+    const mainWorld = findContentScript(contentScripts, "content-main.js");
+    expect(mainWorld).toBeDefined();
+    expect(mainWorld!.matches).toEqual(["https://www.youtube.com/*"]);
+    expect(mainWorld!.run_at).toBe("document_idle");
+    expect(mainWorld!.world).toBe("MAIN");
   });
 
   it("ships icons for all four standard sizes", () => {
