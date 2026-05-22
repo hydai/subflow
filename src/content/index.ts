@@ -97,27 +97,33 @@ function syncSidebar(): void {
 
     if (!isInitialObservation) {
       // SPA navigation between two videos. Tell the background so
-      // SubtitleService.changeVideo (#7) can prune cache entries
-      // for the previous video and reset its playerData. We
-      // deliberately skip this on the very FIRST observation in
-      // the tab — at that point the freshly-extracted player data
-      // arriving from the main-world script could be wiped by a
-      // racing changeVideo if the two messages cross.
+      // SubtitleService.changeVideo (#7) can prune cache entries for
+      // the previous video and reset its playerData. Suppressed on
+      // the very FIRST observation in the tab so that freshly-
+      // extracted player data from the main-world script's initial
+      // run can't be wiped by a racing changeVideo if the two
+      // messages cross — SubtitleService.changeVideo is now also
+      // idempotent on matching videoIds as a belt-and-suspenders.
       void chrome.runtime.sendMessage({
         type: "subflow:video-changed",
         videoId: info.videoId,
       });
-
-      // SPA navigation does NOT re-inject the main-world content
-      // script, but ytInitialPlayerResponse on the page is updated
-      // for the new video. Ask the main-world script (via the
-      // same postMessage bridge it uses outbound) to re-read and
-      // re-post for this new videoId.
-      window.postMessage(
-        { type: "subflow:request-reextraction" },
-        window.location.origin,
-      );
     }
+
+    // Re-extraction request runs on EVERY videoId change, including
+    // the first observation. Two reasons:
+    //   - the tab could have loaded on a non-watch URL where the
+    //     main-world script's document_idle run bailed early; SPA
+    //     navigation to the first /watch then has no player data
+    //     until we ask for one.
+    //   - SPA navigation between two watch URLs never re-injects the
+    //     main-world script, but ytInitialPlayerResponse on the page
+    //     is updated for the new video. The re-extraction picks up
+    //     the new value.
+    window.postMessage(
+      { type: "subflow:request-reextraction" },
+      window.location.origin,
+    );
   }
 }
 
