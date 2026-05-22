@@ -153,6 +153,32 @@ describe("SubtitleService", () => {
     expect(fetchSubtitleXml).toHaveBeenCalledTimes(2);
   });
 
+  it("invalidating during an in-flight fetch does not cache its late-arriving result", async () => {
+    let resolveFirst!: (xml: string) => void;
+    const fetchSubtitleXml = vi
+      .fn<(url: string) => Promise<string>>()
+      .mockImplementationOnce(
+        () => new Promise<string>((resolve) => {
+          resolveFirst = resolve;
+        }),
+      )
+      .mockResolvedValue(SAMPLE_XML);
+    const service = new SubtitleService({ fetchSubtitleXml });
+    service.recordPlayerData(1, makePlayerData({ videoId: "abc", tracks: [enTrack] }));
+
+    const firstCall = service.getSubtitle(1, "abc", ["en"]);
+    service.invalidateVideo(1, "abc");
+    resolveFirst(SAMPLE_XML);
+    const firstResult = await firstCall;
+    // The first caller still receives the (no-longer-trusted) result.
+    expect(firstResult.status).toBe("ok");
+
+    // A subsequent call must NOT see a cache hit — the late write was
+    // suppressed by the epoch bump.
+    await service.getSubtitle(1, "abc", ["en"]);
+    expect(fetchSubtitleXml).toHaveBeenCalledTimes(2);
+  });
+
   it("invalidateVideo evicts every cache entry for the given video", async () => {
     const fetchSubtitleXml = vi.fn().mockResolvedValue(SAMPLE_XML);
     const service = new SubtitleService({ fetchSubtitleXml });

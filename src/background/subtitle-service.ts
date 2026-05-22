@@ -46,6 +46,12 @@ interface TabState {
   playerData: PlayerDataState | null;
   subtitleCache: Map<string, SubtitleSuccess>;
   inFlight: Map<string, Promise<SubtitleResult>>;
+  // Bumped on every invalidation (invalidateVideo / changeVideo).
+  // An in-flight fetch captures the epoch at start and only writes
+  // its result to the cache if the epoch is still current when it
+  // resolves — so an invalidation that races with an in-flight fetch
+  // can't be "undone" by the late-arriving response.
+  epoch: number;
 }
 
 export class SubtitleService {
@@ -127,22 +133,36 @@ export class SubtitleService {
     const inFlight = state.inFlight.get(cacheKey);
     if (inFlight !== undefined) return inFlight;
 
+    const epochAtStart = state.epoch;
     const promise = this.runFetch(playerData.data, selected);
     state.inFlight.set(cacheKey, promise);
     try {
       const result = await promise;
-      if (result.status === "ok") {
+      // Skip the cache write if this fetch was invalidated mid-flight.
+      // The caller still receives `result` (they were waiting for it),
+      // but the stale data does not stick around to fool the next
+      // request.
+      if (result.status === "ok" && state.epoch === epochAtStart) {
         state.subtitleCache.set(cacheKey, result);
       }
       return result;
     } finally {
-      state.inFlight.delete(cacheKey);
+      // Only retract the in-flight entry if it still points at our
+      // promise — invalidation may have already removed it.
+      if (state.inFlight.get(cacheKey) === promise) {
+        state.inFlight.delete(cacheKey);
+      }
     }
   }
 
   // Manual refresh path for the sidebar (#12 will trigger this).
   // Removes every cache entry for the given (tab, video) so the next
-  // getSubtitle call goes back through fetch + parse.
+  // getSubtitle call goes back through fetch + parse. Also evicts
+  // any in-flight entries for the same video and bumps the tab's
+  // epoch — any fetch already mid-flight at this moment will deliver
+  // its result to the original caller but will NOT cache it, so a
+  // subsequent getSubtitle call after invalidation always sees a
+  // cache miss.
   invalidateVideo(tabId: number, videoId: string): void {
     const state = this.tabs.get(tabId);
     if (state === undefined) return;
@@ -150,6 +170,10 @@ export class SubtitleService {
     for (const key of state.subtitleCache.keys()) {
       if (key.startsWith(prefix)) state.subtitleCache.delete(key);
     }
+    for (const key of state.inFlight.keys()) {
+      if (key.startsWith(prefix)) state.inFlight.delete(key);
+    }
+    state.epoch += 1;
   }
 
   // Tab-close cleanup — drop the entire tab's state.
@@ -159,9 +183,12 @@ export class SubtitleService {
 
   // SPA-navigation cleanup. Drop cache entries that do not belong to
   // the new video, and reset the cached player data because the
-  // content script will re-extract for the new page. The new
-  // video's own cache entries (if any from a prior visit in this
-  // tab) are kept so a back-navigation re-uses them.
+  // content script will re-extract for the new page. The new video's
+  // own cache entries (if any from a prior visit in this tab) are
+  // kept so a back-navigation re-uses them. Also evict in-flight
+  // entries for the previous video and bump the epoch so a fetch that
+  // was running for the previous video can't write a stale entry
+  // after the SPA switch.
   changeVideo(tabId: number, newVideoId: string): void {
     const state = this.tabs.get(tabId);
     if (state === undefined) return;
@@ -170,6 +197,10 @@ export class SubtitleService {
     for (const key of state.subtitleCache.keys()) {
       if (!key.startsWith(prefix)) state.subtitleCache.delete(key);
     }
+    for (const key of state.inFlight.keys()) {
+      if (!key.startsWith(prefix)) state.inFlight.delete(key);
+    }
+    state.epoch += 1;
   }
 
   private touch(tabId: number): TabState {
@@ -179,6 +210,7 @@ export class SubtitleService {
         playerData: null,
         subtitleCache: new Map(),
         inFlight: new Map(),
+        epoch: 0,
       };
       this.tabs.set(tabId, state);
     }
