@@ -30,9 +30,10 @@ describe("content-script bridge wiring (SPEC §6.1.1, #4)", () => {
 
   // content.ts is the isolated-world bridge. It must stay free of
   // module-level imports from `@/lib/*` so the classic-script bundle
-  // doesn't pull in a shared chunk. The forwarding logic is generic
-  // (any `subflow:*` postMessage gets forwarded), so no specific tags
-  // need to be imported.
+  // doesn't pull in a shared chunk. The forwarding logic relies on
+  // an inline whitelist (asserted by the test above) rather than on
+  // imported tag constants, so no `@/lib/*` runtime imports should
+  // appear here.
   it("keeps the isolated content script free of @/lib imports", () => {
     const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
     expect(source).not.toMatch(/^import .* from "@\//m);

@@ -14,13 +14,20 @@ import type {
   WorkflowResult,
 } from "./types";
 
+// Constant used as the window.postMessage bridge tag between the
+// main-world and isolated content scripts. Declared above the
+// message-variant types so each variant's `type` field can be linked
+// to it via `typeof` rather than repeating a string literal that
+// could silently drift.
+export const PLAYER_DATA_POSTMESSAGE_TAG = "subflow:player-data-extracted" as const;
+
 // Main-world content script → isolated content script → background:
 // the extractor read window.ytInitialPlayerResponse and produced
 // either typed data or a typed error. The isolated content script
 // forwards this unchanged via chrome.runtime.sendMessage because the
 // main-world script has no access to chrome.* APIs (#4).
 export interface PlayerDataExtractedMessage {
-  type: "subflow:player-data-extracted";
+  type: typeof PLAYER_DATA_POSTMESSAGE_TAG;
   // The video URL at the moment of extraction, so the receiver can
   // double-check the message belongs to the current navigation.
   href: string;
@@ -103,8 +110,3 @@ export type Message =
   | RefetchSubtitleMessage
   | VideoChangedMessage
   | SidebarStateMessage;
-
-// Constant used as the window.postMessage bridge tag between the
-// main-world and isolated content scripts. Picked specifically so it
-// is unlikely to collide with anything YouTube itself posts.
-export const PLAYER_DATA_POSTMESSAGE_TAG = "subflow:player-data-extracted";
