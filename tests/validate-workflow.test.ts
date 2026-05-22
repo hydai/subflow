@@ -56,11 +56,15 @@ describe("validateWorkflow (SPEC §7.4)", () => {
     expect(errors.some((e) => e.field === "promptTemplate")).toBe(true);
   });
 
-  it("rejects headers with `Content-Type` (canonical casing)", () => {
+  it("rejects headers with `Content-Type` (canonical casing) with the SPEC-verbatim message", () => {
     const errors = validateWorkflow(
       workflow({ headers: { "Content-Type": "application/json" } }),
     );
-    expect(errors.some((e) => e.field === "headers")).toBe(true);
+    const err = errors.find((e) => e.field === "headers");
+    expect(err).toBeDefined();
+    expect(err?.message).toBe(
+      "`Content-Type` 由系統固定為 `application/json`，請從 headers 移除此鍵",
+    );
   });
 
   it("rejects headers with `content-type` (lower casing)", () => {

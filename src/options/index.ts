@@ -23,9 +23,28 @@ import type { Workflow } from "@/lib/types";
 
 const root = document.getElementById("app")!;
 
+// Header rows are kept as an ORDERED LIST of {id, key, value} during
+// editing, separate from the Workflow.headers Record. Editing keys
+// in a Record live-updates the data structure as the user types,
+// which races with the value field's input handler (the value writes
+// to "Aut" when the name field has typed "Aut" before "Authorization"
+// resolves). Keeping a row-id-based array decouples in-flight key
+// typing from header lookup, and we collapse to a Record only at
+// save time.
+interface HeaderRow {
+  id: string;
+  key: string;
+  value: string;
+}
+
 type EditState =
   | { mode: "list" }
-  | { mode: "edit"; draft: Workflow; isNew: boolean };
+  | {
+      mode: "edit";
+      draft: Workflow;
+      headerRows: HeaderRow[];
+      isNew: boolean;
+    };
 
 interface AppState {
   workflows: Workflow[];
@@ -66,7 +85,7 @@ function renderApp(): HTMLElement[] {
   const langSection = renderLanguageSection();
   const workflowsSection =
     state.edit.mode === "edit"
-      ? renderEditForm(state.edit.draft, state.edit.isNew)
+      ? renderEditForm(state.edit.draft, state.edit.headerRows, state.edit.isNew)
       : renderWorkflowsList();
   const globalErr =
     state.saveError !== null
@@ -128,16 +147,31 @@ function moveLang(from: number, to: number): void {
   render();
 }
 async function saveLanguages(): Promise<void> {
-  const sanitized = state.languagePriority
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  const result = await setPreferences({ languagePriority: sanitized });
+  // SPEC §7.4: every entry must be a non-empty BCP-47 code AFTER
+  // trimming, and the list must contain at least one entry. Blank /
+  // whitespace-only entries block the save rather than getting
+  // silently dropped — otherwise the user would think their entry
+  // saved when it didn't.
+  const trimmed = state.languagePriority.map((s) => s.trim());
+  if (trimmed.length === 0) {
+    state.saveError =
+      "Add at least one language code before saving (e.g. en, zh-TW).";
+    render();
+    return;
+  }
+  const blankIndex = trimmed.findIndex((s) => s.length === 0);
+  if (blankIndex !== -1) {
+    state.saveError = `Language ${blankIndex + 1} is empty. Remove the blank entry or fill it in before saving.`;
+    render();
+    return;
+  }
+  const result = await setPreferences({ languagePriority: trimmed });
   if (!result.ok) {
     state.saveError = `Could not save language priority: ${result.error.type}: ${result.error.message}`;
     render();
     return;
   }
-  state.languagePriority = sanitized;
+  state.languagePriority = trimmed;
   state.saveError = null;
   render();
 }
@@ -187,25 +221,32 @@ function renderWorkflowRow(w: Workflow, idx: number): HTMLElement {
 
 function moveWorkflow(from: number, to: number): void {
   if (to < 0 || to >= state.workflows.length) return;
-  const [item] = state.workflows.splice(from, 1);
-  state.workflows.splice(to, 0, item!);
-  void persistWorkflows();
+  const next = [...state.workflows];
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item!);
+  void persistAndCommit(next);
 }
 
 function deleteWorkflow(w: Workflow): void {
   const confirmed = confirm(`Delete workflow "${w.name}"?`);
   if (!confirmed) return;
-  state.workflows = state.workflows.filter((x) => x.id !== w.id);
-  void persistWorkflows();
+  const next = state.workflows.filter((x) => x.id !== w.id);
+  void persistAndCommit(next);
 }
 
-async function persistWorkflows(): Promise<void> {
-  const result = await setWorkflows(state.workflows);
+// SPEC §6.6 / §7.4: a failed write must NOT leave the in-memory
+// state ahead of persisted state, otherwise the UI lies about what
+// the user has saved. Compute the proposed next array, write it,
+// and only commit `state.workflows` after success.
+async function persistAndCommit(next: Workflow[]): Promise<void> {
+  const result = await setWorkflows(next);
   if (!result.ok) {
     state.saveError = `Could not save workflows: ${result.error.type}: ${result.error.message}`;
-  } else {
-    state.saveError = null;
+    render();
+    return;
   }
+  state.workflows = next;
+  state.saveError = null;
   render();
 }
 
@@ -222,6 +263,7 @@ function startNew(): void {
       autoRun: false,
       headers: {},
     },
+    headerRows: [],
     isNew: true,
   };
   state.validationErrors = [];
@@ -231,6 +273,11 @@ function startEdit(w: Workflow): void {
   state.edit = {
     mode: "edit",
     draft: { ...w, headers: { ...w.headers } },
+    headerRows: Object.entries(w.headers).map(([key, value]) => ({
+      id: crypto.randomUUID(),
+      key,
+      value,
+    })),
     isNew: false,
   };
   state.validationErrors = [];
@@ -242,45 +289,63 @@ function cancelEdit(): void {
   render();
 }
 
-function renderEditForm(draft: Workflow, isNew: boolean): HTMLElement {
+function renderEditForm(
+  draft: Workflow,
+  headerRows: HeaderRow[],
+  isNew: boolean,
+): HTMLElement {
   const section = el("section", { "aria-labelledby": "edit-h2" });
   section.appendChild(
     el("h2", { id: "edit-h2" }, isNew ? "New workflow" : "Edit workflow"),
   );
 
   section.appendChild(
-    field("Name", "name", textInput(draft.name, (v) => (draft.name = v))),
+    field("Name", "name", "wf-name", textInput(draft.name, (v) => (draft.name = v))),
   );
   section.appendChild(
-    field("URL", "url", textInput(draft.url, (v) => (draft.url = v), "url")),
+    field("URL", "url", "wf-url", textInput(draft.url, (v) => (draft.url = v), "url")),
   );
   section.appendChild(
     field(
       "Prompt template",
       "promptTemplate",
+      "wf-prompt",
       textarea(draft.promptTemplate, (v) => (draft.promptTemplate = v)),
       "Use {{transcript}}, {{title}}, {{video_id}}, {{video_url}}, {{language}}, {{duration_seconds}}, {{transcript_with_timestamps}}.",
     ),
   );
 
-  // autoRun
+  // autoRun — a labelled checkbox is the standard pattern for a
+  // boolean toggle.
   const autoRow = el("div", { class: "field" });
-  const checkbox = el("input", { type: "checkbox" }) as HTMLInputElement;
+  const checkbox = el("input", {
+    type: "checkbox",
+    id: "wf-auto",
+  }) as HTMLInputElement;
   checkbox.checked = draft.autoRun;
   checkbox.addEventListener("change", () => {
     draft.autoRun = checkbox.checked;
   });
-  const autoLabel = el("label");
-  autoLabel.append(checkbox, document.createTextNode(" Auto-run on every video"));
+  const autoLabel = el("label", { for: "wf-auto" });
+  autoLabel.append(
+    checkbox,
+    document.createTextNode(" Auto-run on every video"),
+  );
   autoRow.appendChild(autoLabel);
   section.appendChild(autoRow);
 
-  // Headers
-  section.appendChild(renderHeadersField(draft));
+  section.appendChild(renderHeadersField(headerRows));
 
   const actions = el("div", { class: "actions" });
   actions.appendChild(
-    button("Save", () => saveWorkflow(draft, isNew), "primary"),
+    button(
+      "Save",
+      () => {
+        draft.headers = collapseHeaders(headerRows);
+        void saveWorkflow(draft, isNew);
+      },
+      "primary",
+    ),
   );
   actions.appendChild(button("Cancel", cancelEdit));
   section.appendChild(actions);
@@ -288,7 +353,20 @@ function renderEditForm(draft: Workflow, isNew: boolean): HTMLElement {
   return section;
 }
 
-function renderHeadersField(draft: Workflow): HTMLElement {
+function collapseHeaders(rows: HeaderRow[]): Record<string, string> {
+  // Skip blank-name rows entirely (the user is still typing); last
+  // write wins for duplicates, which is the only sensible thing we
+  // can do once the user has committed to ambiguous data.
+  const out: Record<string, string> = {};
+  for (const row of rows) {
+    const key = row.key.trim();
+    if (key.length === 0) continue;
+    out[key] = row.value;
+  }
+  return out;
+}
+
+function renderHeadersField(rows: HeaderRow[]): HTMLElement {
   const wrap = el("div", { class: "field" });
   wrap.appendChild(el("label", {}, "Headers"));
   wrap.appendChild(
@@ -299,13 +377,9 @@ function renderHeadersField(draft: Workflow): HTMLElement {
     ),
   );
   const list = el("div", { class: "headers-list" });
-  const entries = Object.entries(draft.headers);
-  entries.forEach(([key, value], idx) => {
-    list.appendChild(renderHeaderRow(draft, idx, key, value));
-  });
+  rows.forEach((row, idx) => list.appendChild(renderHeaderRow(rows, row, idx)));
   const addBtn = button("Add header", () => {
-    const newKey = newHeaderKey(draft.headers);
-    draft.headers[newKey] = "";
+    rows.push({ id: crypto.randomUUID(), key: "", value: "" });
     render();
   });
   list.appendChild(addBtn);
@@ -315,85 +389,87 @@ function renderHeadersField(draft: Workflow): HTMLElement {
   return wrap;
 }
 
-function newHeaderKey(headers: Record<string, string>): string {
-  let n = 1;
-  let key = `Header-${n}`;
-  while (key in headers) {
-    n += 1;
-    key = `Header-${n}`;
-  }
-  return key;
-}
-
 function renderHeaderRow(
-  draft: Workflow,
+  rows: HeaderRow[],
+  row: HeaderRow,
   idx: number,
-  key: string,
-  value: string,
 ): HTMLElement {
-  const row = el("div", { class: "header-row" });
+  const wrapper = el("div", { class: "header-row" });
   const keyInput = el("input", {
     type: "text",
-    value: key,
+    value: row.key,
     "aria-label": `Header ${idx + 1} name`,
     placeholder: "Header name",
   }) as HTMLInputElement;
   const valueInput = el("input", {
     type: "text",
-    value,
+    value: row.value,
     "aria-label": `Header ${idx + 1} value`,
     placeholder: "Header value",
   }) as HTMLInputElement;
   const del = button(
     "Remove",
     () => {
-      delete draft.headers[key];
+      const i = rows.findIndex((r) => r.id === row.id);
+      if (i !== -1) rows.splice(i, 1);
       render();
     },
     "danger",
   );
-  keyInput.addEventListener("change", () => {
-    const oldVal = draft.headers[key];
-    delete draft.headers[key];
-    draft.headers[keyInput.value] = oldVal ?? valueInput.value;
-    render();
+  // Both inputs write to the SAME HeaderRow via id (not key), so
+  // typing the name doesn't race with value updates and no stray
+  // half-typed entries appear in the collapsed headers Record.
+  keyInput.addEventListener("input", () => {
+    row.key = keyInput.value;
   });
   valueInput.addEventListener("input", () => {
-    draft.headers[keyInput.value] = valueInput.value;
+    row.value = valueInput.value;
   });
-  row.append(keyInput, valueInput, del);
-  return row;
+  wrapper.append(keyInput, valueInput, del);
+  return wrapper;
 }
 
-function saveWorkflow(draft: Workflow, isNew: boolean): void {
+async function saveWorkflow(draft: Workflow, isNew: boolean): Promise<void> {
   state.validationErrors = validateWorkflow(draft);
   if (state.validationErrors.length > 0) {
     render();
     return;
   }
-  if (isNew) {
-    state.workflows = [...state.workflows, draft];
-  } else {
-    state.workflows = state.workflows.map((w) => (w.id === draft.id ? draft : w));
+  const next = isNew
+    ? [...state.workflows, draft]
+    : state.workflows.map((w) => (w.id === draft.id ? draft : w));
+  const result = await setWorkflows(next);
+  if (!result.ok) {
+    // Stay in edit mode so the user can adjust and retry; the
+    // unpersisted draft is preserved in state.edit.draft.
+    state.saveError = `Could not save workflow: ${result.error.type}: ${result.error.message}`;
+    render();
+    return;
   }
+  state.workflows = next;
   state.edit = { mode: "list" };
   state.validationErrors = [];
-  void persistWorkflows();
+  state.saveError = null;
+  render();
 }
 
 // --- Helpers -------------------------------------------------------
 
 function field(
   label: string,
-  id: string,
+  validationField: WorkflowValidationError["field"],
+  inputId: string,
   input: HTMLElement,
   hint?: string,
 ): HTMLElement {
   const wrap = el("div", { class: "field" });
-  wrap.appendChild(el("label", {}, label));
+  input.id = inputId;
+  // Associate the visible <label> with the input so screen readers
+  // announce the label when the input takes focus.
+  wrap.appendChild(el("label", { for: inputId }, label));
   if (hint !== undefined) wrap.appendChild(el("p", { class: "muted" }, hint));
   wrap.appendChild(input);
-  const err = errorFor(id as WorkflowValidationError["field"]);
+  const err = errorFor(validationField);
   if (err !== null) {
     input.setAttribute("aria-invalid", "true");
     wrap.appendChild(err);

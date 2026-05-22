@@ -62,7 +62,9 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationError[] 
     });
   }
 
-  // Case-insensitive `Content-Type` rejection per SPEC §7.4.
+  // Case-insensitive `Content-Type` rejection per SPEC §7.4. The
+  // error message is the verbatim string the SPEC specifies, so the
+  // UI copy and SPEC conformance audit can't drift.
   const contentTypeKey = Object.keys(workflow.headers).find(
     (key) => key.toLowerCase() === "content-type",
   );
@@ -70,7 +72,7 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationError[] 
     errors.push({
       field: "headers",
       message:
-        "`Content-Type` is fixed to `application/json` by the runner. Remove this header.",
+        "`Content-Type` 由系統固定為 `application/json`，請從 headers 移除此鍵",
     });
   }
 
