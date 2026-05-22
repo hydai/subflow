@@ -22,7 +22,7 @@ describe("substitute (SPEC §7.3)", () => {
   });
 
   it("leaves an undefined variable's placeholder verbatim", () => {
-    const vars: PromptVariables = { ...baseVars, title: undefined as unknown as string };
+    const vars: PromptVariables = { ...baseVars, title: undefined };
     expect(substitute("Hello {{title}}", vars)).toBe("Hello {{title}}");
   });
 
@@ -57,8 +57,13 @@ describe("substitute (SPEC §7.3)", () => {
     );
   });
 
-  it("does not consume non-variable braces (e.g. literal `{{}}` or `{{}}`)", () => {
-    // Empty placeholders and stray brace pairs are passed through.
-    expect(substitute("Empty: {{}} stays.", baseVars)).toBe("Empty: {{}} stays.");
+  it("does not consume placeholders whose content is not a valid \\w+ identifier", () => {
+    // Empty `{{}}`, hyphenated `{{my-var}}`, dotted `{{a.b}}`, and
+    // whitespaced `{{a b}}` all fail the `\w+` requirement and pass
+    // through verbatim — only the documented variable set is
+    // substitution-eligible.
+    expect(substitute("Cases: {{}} {{my-var}} {{a.b}} {{a b}}", baseVars)).toBe(
+      "Cases: {{}} {{my-var}} {{a.b}} {{a b}}",
+    );
   });
 });
