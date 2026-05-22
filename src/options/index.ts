@@ -324,13 +324,24 @@ async function saveLanguages(): Promise<void> {
   }
   state.languagePriority = trimmed;
   state.languageError = null;
-  // Don't clear state.saveError unconditionally: the saveError
-  // banner can carry a workflow-related warning (e.g. "Some stored
-  // workflows were malformed") which is NOT addressed by a
-  // languages-only save. Saving languages successfully only
-  // demonstrates the preferences write path; it tells the user
-  // nothing about whether the workflows write would succeed. The
-  // workflow-write path clears the banner on its own success.
+  // The saveError banner carries TWO kinds of message:
+  //   (a) preferences-related — load warning about malformed
+  //       language priority, or a previous setPreferences failure
+  //   (b) workflows-related — workflow load warnings or
+  //       setWorkflows failures
+  // A successful setPreferences only proves the (a) class of
+  // warning is resolved; (b) is still unaddressed. Look at the
+  // current banner text and clear only when it's an (a)-class
+  // message; leave workflow-related banners in place so the user
+  // doesn't lose context. Both classes use a distinct text prefix
+  // so this is just a substring check.
+  if (
+    state.saveError !== null &&
+    (state.saveError.includes("language") ||
+      state.saveError.includes("preferences"))
+  ) {
+    state.saveError = null;
+  }
   render();
 }
 
@@ -585,8 +596,17 @@ function collapseHeaders(rows: HeaderRow[]): Record<string, string> {
 }
 
 function renderHeadersField(rows: HeaderRow[]): HTMLElement {
-  const wrap = el("div", { class: "field" });
-  wrap.appendChild(el("label", {}, "Headers"));
+  // Headers is a multi-row group, not a single input — there's no
+  // sensible target for a <label for=…>. Use the group-labelling
+  // pattern instead: a <h3>-style label gets an id, the wrapper
+  // becomes role="group" + aria-labelledby. Screen readers announce
+  // "Headers, group" when focus enters any row's input.
+  const wrap = el("div", {
+    class: "field",
+    role: "group",
+    "aria-labelledby": "headers-label",
+  });
+  wrap.appendChild(el("label", { id: "headers-label" }, "Headers"));
   wrap.appendChild(
     el(
       "p",

@@ -51,7 +51,11 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationError[] 
     errors.push({ field: "name", message: "Name is required." });
   }
 
-  if (workflow.url.length === 0) {
+  // Trim-aware "required" check: a whitespace-only URL is the same
+  // class of error as an empty one ("you forgot to fill this in"),
+  // not a scheme error. Consistent with the name / promptTemplate
+  // trim-aware checks above.
+  if (workflow.url.trim().length === 0) {
     errors.push({ field: "url", message: "URL is required." });
   } else if (!workflow.url.startsWith("https://")) {
     // SPEC §7.4 says the URL string must literally begin with
