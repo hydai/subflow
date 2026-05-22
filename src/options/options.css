@@ -1,0 +1,227 @@
+/* SPEC §6.8 — single options page; vanilla CSS, no framework. */
+
+:root {
+  --bg: #ffffff;
+  --fg: #111827;
+  --muted: #6b7280;
+  --border: #d1d5db;
+  --accent: #2563eb;
+  --accent-fg: #ffffff;
+  --error-bg: #fef2f2;
+  --error-border: #fca5a5;
+  --error-fg: #991b1b;
+  --field-gap: 0.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --fg: #e5e7eb;
+    --muted: #9ca3af;
+    --border: #374151;
+    --error-bg: #3f0808;
+    --error-border: #7f1d1d;
+    --error-fg: #fecaca;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 1.5rem;
+}
+
+h2 {
+  font-size: 1.125rem;
+  margin: 2rem 0 0.75rem;
+}
+
+section {
+  margin-bottom: 1.5rem;
+}
+
+label {
+  display: block;
+  font-weight: 500;
+  margin-bottom: var(--field-gap);
+}
+
+input[type="text"],
+input[type="url"],
+textarea {
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  font: inherit;
+  color: inherit;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+textarea {
+  min-height: 5rem;
+  resize: vertical;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+input[aria-invalid="true"],
+textarea[aria-invalid="true"] {
+  border-color: var(--error-border);
+  background: var(--error-bg);
+}
+
+input[type="checkbox"] {
+  margin-right: 0.5rem;
+  vertical-align: middle;
+}
+
+button {
+  font: inherit;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+}
+
+button:hover {
+  background: rgba(127, 127, 127, 0.08);
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+button.primary:hover {
+  filter: brightness(0.95);
+}
+
+button.danger {
+  color: var(--error-fg);
+  border-color: var(--error-border);
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+.field-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.error {
+  margin: 0.25rem 0 0;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.85em;
+  color: var(--error-fg);
+  background: var(--error-bg);
+  border: 1px solid var(--error-border);
+  border-radius: 0.25rem;
+}
+
+.error.global {
+  margin: 0 0 1rem;
+}
+
+.workflow-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+}
+
+.workflow-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.workflow-list li:last-child {
+  border-bottom: none;
+}
+
+.workflow-list .meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.workflow-list .name {
+  font-weight: 600;
+}
+
+.workflow-list .url {
+  color: var(--muted);
+  font-size: 0.85em;
+  word-break: break-all;
+}
+
+.empty {
+  padding: 1rem;
+  color: var(--muted);
+  text-align: center;
+  background: rgba(127, 127, 127, 0.05);
+  border-radius: 0.25rem;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+}
+
+.headers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.header-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.header-row input {
+  flex: 1;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.9em;
+  margin-top: 0.25rem;
+}
+
+.lang-prefs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.lang-prefs input {
+  flex: 1;
+}
