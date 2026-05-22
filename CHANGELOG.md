@@ -19,9 +19,9 @@ All notable changes to Subflow are documented in this file. The format is based 
 
 The visible options page UI ([#9](https://github.com/hydai/subflow/issues/9), [#10](https://github.com/hydai/subflow/issues/10)), the sidebar renderer ([#12](https://github.com/hydai/subflow/issues/12)), the sidebar collapse / cross-video state behavior ([#13](https://github.com/hydai/subflow/issues/13)), the workflow trigger semantics ([#16](https://github.com/hydai/subflow/issues/16)), and the user-visible error surfaces for subtitle ([#17](https://github.com/hydai/subflow/issues/17)) and workflow ([#18](https://github.com/hydai/subflow/issues/18)) failures are still in progress. Subflow is not yet end-to-end functional from a user's perspective; the merged work is the internal pipeline that those UI layers will plug into.
 
-## [0.1.0] — TBD
+## 0.1.0 — TBD
 
-First public release will be cut after the issues listed under "Known not-yet-implemented" are merged. Until then, this CHANGELOG accumulates entries under `[Unreleased]`.
+First public release will be cut after the issues listed under "Known not-yet-implemented" are merged. Until then, this CHANGELOG accumulates entries under `[Unreleased]`. Once the v0.1.0 tag exists, this heading becomes `## [0.1.0] — <date>` and the link footer below gains a `[0.1.0]: …/releases/tag/v0.1.0` line.
 
 [Unreleased]: https://github.com/hydai/subflow/commits/main
 <!--
