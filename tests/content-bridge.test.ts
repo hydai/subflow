@@ -45,21 +45,43 @@ describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
   });
 
   // Classic-script entries (main-world.ts + content/index.ts) must
-  // never import the SAME `@/lib/*` module: Rollup would then emit a
-  // shared chunk, breaking the classic-script load. Each entry may
-  // import from `@/lib/*` only when it is the SOLE consumer of that
-  // module — Rollup inlines a single-consumer import.
-  it("does not share any @/lib import between the two classic-script entries", () => {
-    const mainWorldImports = new Set(
-      [...extractImportsOf("src/content/main-world.ts")].filter((s) => s.startsWith("@/lib/")),
-    );
-    const contentImports = new Set(
-      [...extractImportsOf("src/content/index.ts")].filter((s) => s.startsWith("@/lib/")),
-    );
-    const shared: string[] = [];
-    for (const m of mainWorldImports) {
-      if (contentImports.has(m)) shared.push(m);
+  // never share an `@/lib/*` import with ANY other build entry. The
+  // moment two entries import the same module, Rollup emits a shared
+  // chunk — and any ESM `import` statement in the emitted
+  // \`content.js\` / \`content-main.js\` breaks the classic-script
+  // load. With single-consumer imports, Rollup inlines.
+  //
+  // The check below walks the direct imports of each entry source
+  // and asserts that every `@/lib/*` module that a classic entry
+  // pulls in is unique across the whole build.
+  it("does not share any direct @/lib import between any two build entries", () => {
+    const entrySources = [
+      "src/background/index.ts",
+      "src/content/index.ts",
+      "src/content/main-world.ts",
+      "src/sidebar/index.ts",
+      "src/options/index.ts",
+    ];
+    const classicEntries = new Set(["src/content/index.ts", "src/content/main-world.ts"]);
+
+    // Map<module, entries that import it>
+    const importersOf = new Map<string, string[]>();
+    for (const entry of entrySources) {
+      const libImports = [...extractImportsOf(entry)].filter((s) => s.startsWith("@/lib/"));
+      for (const mod of libImports) {
+        const list = importersOf.get(mod) ?? [];
+        list.push(entry);
+        importersOf.set(mod, list);
+      }
     }
-    expect(shared).toEqual([]);
+
+    const conflicts: Array<{ module: string; importers: string[] }> = [];
+    for (const [mod, importers] of importersOf) {
+      const touchesClassic = importers.some((e) => classicEntries.has(e));
+      if (touchesClassic && importers.length > 1) {
+        conflicts.push({ module: mod, importers });
+      }
+    }
+    expect(conflicts).toEqual([]);
   });
 });

@@ -129,5 +129,3 @@ document.addEventListener("yt-navigate-finish", syncSidebar);
 // to catch the cases that don't dispatch popstate (e.g. internal
 // history.pushState followed by no further navigation event).
 window.addEventListener("popstate", syncSidebar);
-
-export {};
