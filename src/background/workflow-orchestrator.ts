@@ -88,8 +88,11 @@ export class WorkflowOrchestrator {
     state.inFlight.clear();
   }
 
-  // Tab-close cleanup — drop everything for the tab.
+  // Tab-close cleanup — abort all running workflows for this tab
+  // (so a request started just before the tab closed doesn't keep
+  // running into the void) and drop the tab's autoRun history.
   forgetTab(tabId: number): void {
+    this.abortInFlight(tabId);
     this.tabs.delete(tabId);
   }
 

@@ -70,11 +70,19 @@ export async function runWorkflow(
 
   // Internal controller drives the 60s timeout; external signal can
   // also abort it. We track WHY the abort happened (timeout vs
-  // external) by inspecting deps.externalSignal.aborted at catch
-  // time — `controller.signal.reason` would be a cleaner option but
-  // is not universally supported in service-worker runtimes yet.
+  // external) with explicit booleans rather than re-reading
+  // externalSignal.aborted at catch time, because the timeout AND
+  // an external abort can both fire (e.g., timeout aborts, then the
+  // SPA-navigation handler also aborts on the next tick). Whoever
+  // flips the flag first wins the classification: a real timeout
+  // must not be misreported as an external abort.
   const controller = new AbortController();
-  const timeoutHandle = setTimeout(() => controller.abort(), WORKFLOW_TIMEOUT_MS);
+  let timedOut = false;
+  let externallyAborted = false;
+  const timeoutHandle = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, WORKFLOW_TIMEOUT_MS);
 
   // Forward external aborts (e.g. SPA navigation, #16) into our
   // controller, and short-circuit if the signal is already aborted
@@ -84,9 +92,15 @@ export async function runWorkflow(
   if (externalSignal !== undefined) {
     if (externalSignal.aborted) {
       clearTimeout(timeoutHandle);
+      externallyAborted = true;
       return abortedResult(workflow, timestamp);
     }
-    externalAbortHandler = () => controller.abort();
+    externalAbortHandler = () => {
+      // Only flip if the timeout didn't beat us to it. Once
+      // `timedOut === true`, the result classification is locked.
+      if (!timedOut) externallyAborted = true;
+      controller.abort();
+    };
     externalSignal.addEventListener("abort", externalAbortHandler);
   }
   const cleanupExternal = (): void => {
@@ -107,9 +121,20 @@ export async function runWorkflow(
     clearTimeout(timeoutHandle);
     cleanupExternal();
     if (isAbortError(err)) {
-      return externalSignal?.aborted === true
-        ? abortedResult(workflow, timestamp)
-        : timeoutResult(workflow, timestamp);
+      // Three classifications, in priority order:
+      //   1. Internal timeout fired → "timeout" (wins even if an
+      //      external abort also arrives — once the timer fires,
+      //      the request DID time out).
+      //   2. External signal aborted but no timeout → "aborted".
+      //   3. Neither flag set (e.g. a runtime-injected AbortError
+      //      from a tab unload, or a test that throws an
+      //      AbortError-shaped object directly) → "timeout".
+      //      This matches the runner's pre-#16 behavior: any
+      //      AbortError of unknown origin was historically
+      //      treated as the timeout path.
+      if (timedOut) return timeoutResult(workflow, timestamp);
+      if (externallyAborted) return abortedResult(workflow, timestamp);
+      return timeoutResult(workflow, timestamp);
     }
     return networkErrorResult(workflow, timestamp, err);
   }
@@ -124,9 +149,20 @@ export async function runWorkflow(
     clearTimeout(timeoutHandle);
     cleanupExternal();
     if (isAbortError(err)) {
-      return externalSignal?.aborted === true
-        ? abortedResult(workflow, timestamp)
-        : timeoutResult(workflow, timestamp);
+      // Three classifications, in priority order:
+      //   1. Internal timeout fired → "timeout" (wins even if an
+      //      external abort also arrives — once the timer fires,
+      //      the request DID time out).
+      //   2. External signal aborted but no timeout → "aborted".
+      //   3. Neither flag set (e.g. a runtime-injected AbortError
+      //      from a tab unload, or a test that throws an
+      //      AbortError-shaped object directly) → "timeout".
+      //      This matches the runner's pre-#16 behavior: any
+      //      AbortError of unknown origin was historically
+      //      treated as the timeout path.
+      if (timedOut) return timeoutResult(workflow, timestamp);
+      if (externallyAborted) return abortedResult(workflow, timestamp);
+      return timeoutResult(workflow, timestamp);
     }
     return networkErrorResult(workflow, timestamp, err);
   }

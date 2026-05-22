@@ -87,6 +87,7 @@ interface ExecuteWorkflowPayload {
   type: "subflow:execute-workflow";
   workflow: Workflow;
   variables: PromptVariables;
+  trigger: "manual" | "auto";
   videoId: string;
   requestId: string;
 }
@@ -254,6 +255,7 @@ function isExecuteWorkflowPayload(value: unknown): value is ExecuteWorkflowPaylo
   if (v.type !== "subflow:execute-workflow") return false;
   if (typeof v.videoId !== "string" || v.videoId.length === 0) return false;
   if (typeof v.requestId !== "string" || v.requestId.length === 0) return false;
+  if (v.trigger !== "manual" && v.trigger !== "auto") return false;
   if (!isWorkflow(v.workflow)) return false;
   if (!isPromptVariables(v.variables)) return false;
   return true;
@@ -316,34 +318,56 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 
     case "subflow:execute-workflow":
       if (!isExecuteWorkflowPayload(message)) return false;
-      orchestrator
-        .runManual(tabId, message.workflow, message.variables)
-        .then((result) => {
-          // SPEC §6.7: aborted requests do not produce sidebar
-          // entries. We still send a response so the sender's
-          // promise settles, but with a discriminator the caller
-          // (sidebar) can filter out.
-          sendResponse({
-            videoId: message.videoId,
-            requestId: message.requestId,
-            result,
-            suppressed: result.outcome === "aborted",
+      {
+        const dispatch =
+          message.trigger === "auto"
+            ? orchestrator.runAutoRun(
+                tabId,
+                message.videoId,
+                message.workflow,
+                message.variables,
+              )
+            : orchestrator.runManual(tabId, message.workflow, message.variables);
+        dispatch
+          .then((result) => {
+            // autoRun dedup: a null result means "this (tabId,
+            // videoId, workflowId) has already fired in this tab".
+            // Still send a response so the sender's promise settles,
+            // but mark it suppressed so the sidebar doesn't add an
+            // entry to the result list.
+            if (result === null) {
+              sendResponse({
+                videoId: message.videoId,
+                requestId: message.requestId,
+                result: null,
+                suppressed: true,
+              });
+              return;
+            }
+            // SPEC §6.7: aborted requests do not produce sidebar
+            // entries.
+            sendResponse({
+              videoId: message.videoId,
+              requestId: message.requestId,
+              result,
+              suppressed: result.outcome === "aborted",
+            });
+          })
+          .catch((err: unknown) => {
+            sendResponse({
+              videoId: message.videoId,
+              requestId: message.requestId,
+              result: {
+                workflowId: message.workflow.id,
+                workflowName: message.workflow.name,
+                outcome: "network-error",
+                body: err instanceof Error ? err.message : String(err),
+                timestamp: Date.now(),
+              },
+              suppressed: false,
+            });
           });
-        })
-        .catch((err: unknown) => {
-          sendResponse({
-            videoId: message.videoId,
-            requestId: message.requestId,
-            result: {
-              workflowId: message.workflow.id,
-              workflowName: message.workflow.name,
-              outcome: "network-error",
-              body: err instanceof Error ? err.message : String(err),
-              timestamp: Date.now(),
-            },
-            suppressed: false,
-          });
-        });
+      }
       // Keep the message channel open for the async sendResponse.
       return true;
 

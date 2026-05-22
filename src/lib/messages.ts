@@ -62,6 +62,12 @@ export interface ExecuteWorkflowMessage {
   type: "subflow:execute-workflow";
   workflow: Workflow;
   variables: PromptVariables;
+  // `"manual"` → no dedup, always runs (SPEC §6.5).
+  // `"auto"`   → background dedups by (tabId, videoId, workflowId)
+  //              per SPEC §6.5; if the triple has already fired in
+  //              this tab, the message is silently dropped and the
+  //              response.suppressed flag is `true`.
+  trigger: "manual" | "auto";
   // Used to associate the response with the right sidebar entry and
   // to support SPA-switch cancellation (#16).
   videoId: string;
