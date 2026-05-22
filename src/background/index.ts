@@ -214,7 +214,18 @@ function isWorkflow(value: unknown): value is Workflow {
   const w = value as Record<string, unknown>;
   if (typeof w.id !== "string" || w.id.length === 0) return false;
   if (typeof w.name !== "string" || w.name.length === 0) return false;
-  if (typeof w.url !== "string" || !w.url.startsWith("https://")) return false;
+  // Parse via URL so whitespace, newlines, or malformed strings get
+  // rejected — `startsWith("https://")` alone would accept
+  // `"https:// evil.example/path\n"` and similar nonsense. We
+  // require an actual `https:` scheme on a non-empty hostname.
+  if (typeof w.url !== "string") return false;
+  try {
+    const parsed = new URL(w.url);
+    if (parsed.protocol !== "https:") return false;
+    if (parsed.hostname.length === 0) return false;
+  } catch {
+    return false;
+  }
   // SPEC §7.4: promptTemplate is required AND non-empty. An empty
   // template would POST `{"prompt": ""}`, which is a bug, not a
   // configuration option.
@@ -273,6 +284,14 @@ function isExecuteWorkflowPayload(value: unknown): value is ExecuteWorkflowPaylo
   if (v.trigger !== "manual" && v.trigger !== "auto") return false;
   if (!isWorkflow(v.workflow)) return false;
   if (!isPromptVariables(v.variables)) return false;
+  // Cross-field consistency: the videoId on the envelope MUST match
+  // the videoId carried in variables. A mismatch (sender bug or
+  // forged message) would mean autoRun dedup keys against the
+  // envelope's videoId while the prompt body claims a different
+  // video — making cancellation, dedup, and the rendered result
+  // ambiguous. Reject so the sidebar can never receive a result
+  // whose prompt-vars disagree with its own envelope.
+  if (v.videoId !== v.variables.video_id) return false;
   return true;
 }
 
