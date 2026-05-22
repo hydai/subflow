@@ -23,7 +23,22 @@
 // file-local rather than entering the global TS scope. Rollup strips
 // the empty re-export from the emitted bundle (no semantic effect),
 // so the classic-script load is unaffected.
-const ALLOWED_TAGS: readonly string[] = ["subflow:player-data-extracted"];
+const PLAYER_DATA_TAG = "subflow:player-data-extracted";
+
+// Minimal shape check for each allowed tag. Any page-world script can
+// call window.postMessage with a valid tag, so forwarding the raw
+// payload through to chrome.runtime would let a hostile page DoS the
+// background or inject garbage result shapes. Each tag has a small
+// inline validator that the bridge consults before forwarding.
+function isPlayerDataPayload(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  if (v.type !== PLAYER_DATA_TAG) return false;
+  if (typeof v.href !== "string") return false;
+  const result = v.result;
+  if (result === null || typeof result !== "object") return false;
+  return typeof (result as { ok?: unknown }).ok === "boolean";
+}
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (event.source !== window) return;
@@ -32,8 +47,15 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (data === null || typeof data !== "object") return;
   const candidate = data as { type?: unknown };
   if (typeof candidate.type !== "string") return;
-  if (!ALLOWED_TAGS.includes(candidate.type)) return;
-  void chrome.runtime.sendMessage(data);
+
+  // Each allowed tag has its own minimal validator. Adding a new tag
+  // here requires adding both the tag and a validator branch, which
+  // forces a deliberate code review.
+  if (candidate.type === PLAYER_DATA_TAG) {
+    if (!isPlayerDataPayload(data)) return;
+    void chrome.runtime.sendMessage(data);
+    return;
+  }
 });
 
 export {};

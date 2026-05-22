@@ -24,8 +24,25 @@ function hasSubflowType(value: unknown): value is { type: `subflow:${string}` } 
   return typeof candidate.type === "string" && candidate.type.startsWith("subflow:");
 }
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+// Sender guard: messages coming through the content-script bridge
+// originate from a YouTube tab. Reject anything posted from other
+// extension contexts (e.g. the options page) or from tabs on other
+// origins so a compromised / hostile non-YouTube context cannot drive
+// the subtitle / workflow pipelines via forged messages.
+function isFromYouTubeTab(sender: chrome.runtime.MessageSender): boolean {
+  const url = sender.tab?.url;
+  if (typeof url !== "string") return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.origin === "https://www.youtube.com";
+  } catch {
+    return false;
+  }
+}
+
+chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (!hasSubflowType(message)) return false;
+  if (!isFromYouTubeTab(sender)) return false;
   switch (message.type) {
     case "subflow:player-data-extracted":
       // TODO(#5): hand off to the caption-track selector after
