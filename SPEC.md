@@ -279,7 +279,6 @@ Workflow: {
 |---|---|
 | 錯誤呈現 | 觀看影片過程中產生的錯誤訊息一律顯示於側邊欄；設定頁的儲存驗證錯誤顯示為欄位旁 inline 訊息。任何使用者可見錯誤皆不以 `chrome.notifications`、`alert()`、或主控台訊息呈現 |
 | HTTPS only | 工作流 URL 必須為 `https://`；HTTP 在儲存或請求時阻擋 |
-| 時間表示 | 所有時間以 UTC ISO 8601 儲存；UI 顯示時轉成使用者時區 |
 | 文字渲染 | AI 回應與字幕在側邊欄一律以純文字呈現，保留換行；不解析 Markdown / HTML / script |
 | 截斷 | 4xx / 5xx 回應 body 顯示時截斷至前 2000 字元，超過部分以 `…(truncated)` 結尾；2xx 回應 body 不截斷，整段顯示於側邊欄 |
 
