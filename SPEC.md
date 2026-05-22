@@ -85,9 +85,11 @@ Extension 對後端發出 `GET /transcripts/:videoId?lang=<優先序>`：
 
 1. 後端依語言優先序逐一查詢邊緣快取 → KV
 2. 任一語言命中即回 200 與該語言字幕（`language` 欄位指出實際語言）
-3. 全部未命中 → 後端從 YouTube 抓取可用字幕清單 → 選出優先序中第一個可用的語言 → 解碼字幕 → 寫入 KV 與邊緣快取 → 回 200
+3. 全部未命中 → 後端從 YouTube 抓取可用字幕清單 → 依下方匹配規則選出字幕 → 解碼 → 寫入 KV 與邊緣快取 → 回 200
 4. 影片完全無字幕 → 回 404 (`error: "no_captions"`)
 5. YouTube 抓取失敗 → 回 502 (`error: "youtube_unavailable"`)
+
+**匹配規則**：依使用者語言優先序逐一檢查；同一語言代碼若有多個 source，依 `human > auto > translation` 排序；第一個命中者即為結果。
 
 ### 6.2 快取語意
 
@@ -96,7 +98,7 @@ Extension 對後端發出 `GET /transcripts/:videoId?lang=<優先序>`：
 | 快取鍵 | `(videoId, 實際匹配的語言代碼)` |
 | 寫入時機 | 冷啟動的後端抓取成功後立即寫入 |
 | 過期 | 永不自動過期；只接受手動刷新 |
-| 失效路徑 | `POST /transcripts/:videoId/refresh?lang=<語言>` 同步清除邊緣快取與 KV |
+| 失效路徑 | `POST /transcripts/:videoId/refresh?lang=<單一語言>` 同步清除 (videoId, 該語言) 的邊緣快取與 KV |
 | Cache-Control | 200 回應為 `public, immutable, max-age=31536000`；404 / 502 為 `no-store` |
 | 匿名性 | 後端不要求授權；任何人都可讀取已快取的公開影片字幕 |
 
@@ -114,11 +116,12 @@ Extension 對後端發出 `GET /transcripts/:videoId?lang=<優先序>`：
 | 狀態 | 行為 |
 |---|---|
 | 出現 | 使用者位於 YouTube `watch` 頁時注入 |
-| 顯示內容 | 工作流按鈕列、最近 5 筆執行結果、字幕狀態（已快取／剛抓取／無字幕）、手動刷新按鈕 |
+| 顯示內容 | 工作流按鈕列、最近 5 筆執行結果（成功與失敗都計入）、字幕狀態（已快取／剛抓取／無字幕）、手動刷新按鈕 |
 | 收合 | 提供收合鈕；收合狀態於同分頁的後續影片切換中保留 |
 | 跨影片切換 | YouTube SPA 切片時側邊欄保留；新影片載入後重設結果列表 |
 | 結果排序 | 最新結果置頂 |
 | 結果呈現 | 純文字保留換行；不執行 HTML 或 script |
+| 按鈕溢位 | 工作流數超出側邊欄寬度時，按鈕列在水平方向可捲動；不換行、不截斷按鈕標籤 |
 
 ### 6.5 觸發語意
 
@@ -147,9 +150,21 @@ Extension 對後端發出 `GET /transcripts/:videoId?lang=<優先序>`：
 | 邊緣快取前置 | 後端在寫入 KV 前同時 `cache.put()` 到 Cloudflare Cache API |
 | 200 回應快取頭 | `Cache-Control: public, immutable, max-age=31536000` 由 CDN 自動快取至邊緣節點 |
 | 失效路徑 | 只有 `POST /…/refresh` 會同時清除邊緣與 KV；其他路徑不會觸發失效 |
-| 後端日誌 | 僅記錄 videoId、語言、命中層級（edge / kv / origin）；不記錄 IP、cookie、使用者識別 |
+| 後端日誌 | Subflow 應用層日誌僅記錄 videoId、語言、命中層級（edge / kv / origin）；不記錄 IP、cookie、使用者識別。Cloudflare 平台預設的邊緣請求日誌依平台政策保留，Subflow 不額外開啟亦不延長保留 |
 | Subrequest 預算 | 單次 `GET` 命中邊緣 = 1；命中 KV = 2；冷抓取 ≤ 5（YouTube 字幕清單 1 + 字幕內容 1 + KV 寫 1 + 邊緣快取寫 1 + 額外回應 1） |
 | 單次 `refresh` | KV 刪除 1 + 邊緣清除 1 + 冷抓取 ≤ 4，總計 ≤ 6 subrequests |
+
+### 6.8 設定頁
+
+設定 UI 為 Chrome extension options page，與側邊欄為兩個獨立 UI。
+
+| 屬性 | 規則 |
+|---|---|
+| 進入點 | (a) 點擊瀏覽器工具列上的 Subflow 圖示；(b) 從 `chrome://extensions` 的 Subflow 條目點「選項」 |
+| 顯示內容 | 語言偏好優先序編輯器、工作流列表、單一工作流編輯表單 |
+| 操作 | 建立 / 編輯 / 刪除 / 重新排序工作流；變更語言偏好 |
+| 儲存驗證 | 依 §7.4 必填規則檢查；任一驗證失敗，阻擋儲存並 inline 顯示錯誤 |
+| 對側邊欄的影響 | 設定變更於下一次 watch 頁載入或側邊欄重新整理時生效；不會主動推送到既有開啟的側邊欄 |
 
 ---
 
@@ -185,7 +200,12 @@ Extension 對後端發出 `GET /transcripts/:videoId?lang=<優先序>`：
 
 **`POST /transcripts/:videoId/refresh`**
 
-參數與回應結構同 `GET`。副作用：先清除 (videoId, 匹配的語言) 的邊緣快取與 KV，再執行冷抓取並回填。
+| 參數 | 位置 | 必要 | 規則 |
+|---|---|---|---|
+| `videoId` | path | 是 | 同 `GET` |
+| `lang` | query | 是 | **單一** BCP-47 語言代碼；不接受逗號分隔的優先序 |
+
+副作用：先清除 (videoId, 該語言) 的邊緣快取與 KV，再對該語言執行冷抓取並回填。200 回應 body 結構同 `GET`；404、502 錯誤碼語意同 `GET`。
 
 ### 7.2 工作流執行契約
 
@@ -212,26 +232,28 @@ Extension 對後端發出 `GET /transcripts/:videoId?lang=<優先序>`：
 | `{{language}}` | 實際使用的字幕語言 BCP-47 代碼 |
 | `{{duration_seconds}}` | 影片總時長（秒，整數） |
 
-未定義或拼錯的變數佔位符在替換階段不被處理，原樣保留於送出字串中。
+未定義或拼錯的變數佔位符在替換階段不被處理，原樣保留於送出字串中。變數替換為**單回合操作**：替換後的內容（例如字幕文字本身）不再進行第二次掃描，即使字幕中出現 `{{transcript}}` 字串也不被視為變數。
 
 ### 7.4 `chrome.storage.local` 結構
 
 ```
 preferences: {
-  languagePriority: string[]   // 例如 ["zh-TW", "en"]
+  languagePriority: string[]              // 必填；至少一個 BCP-47 代碼，例如 ["zh-TW", "en"]
 }
 
 workflows: Workflow[]
 
 Workflow: {
-  id: string                   // UUID v4
-  name: string                 // 使用者命名
-  url: string                  // 必須 HTTPS
-  headers: { [k: string]: string }
-  promptTemplate: string       // 含 §7.3 變數
-  autoRun: boolean
+  id:             string                  // 必填；UUID v4，由系統產生
+  name:           string                  // 必填；非空字串，使用者命名
+  url:            string                  // 必填；必須以 https:// 開頭
+  promptTemplate: string                  // 必填；非空字串；含 §7.3 變數
+  autoRun:        boolean                 // 必填
+  headers:        Record<string, string>  // 選填；預設為 {}
 }
 ```
+
+儲存時依此規則驗證；任一必填欄位缺失、為空字串、或 `url` 非 `https://` 開頭，設定頁阻擋儲存並 inline 顯示錯誤。
 
 ### 7.5 `manifest.json` 權限介面
 
@@ -243,13 +265,13 @@ Workflow: {
 
 顯式不申請：`tabs`、`cookies`、`<all_urls>`、`history`、`downloads`。
 
-工作流的 AI 端點請求由背景服務發出，不需 host permission；使用者端點若啟用 CORS 限制，需允許 `chrome-extension://…` 的 Origin。
+工作流的 AI 端點請求由背景服務發出。Chrome MV3 對未列於 `host_permissions` 的網域強制 CORS preflight，因此使用者的 AI 端點**必須**回應允許 Origin `chrome-extension://*` 的 CORS header（至少包含 `Access-Control-Allow-Origin` 與 `Access-Control-Allow-Headers`）。v1 不支援動態申請 host_permissions；無法配置 CORS 的端點不能作為 Subflow 的工作流目標。
 
 ### 7.6 一致性模式
 
 | 模式 | 規則 |
 |---|---|
-| 錯誤呈現 | 所有使用者可見的錯誤訊息均顯示於側邊欄；不使用 `chrome.notifications`、`alert()`、或主控台訊息 |
+| 錯誤呈現 | 觀看影片過程中產生的錯誤訊息一律顯示於側邊欄；設定頁的儲存驗證錯誤顯示為欄位旁 inline 訊息。任何使用者可見錯誤皆不以 `chrome.notifications`、`alert()`、或主控台訊息呈現 |
 | HTTPS only | 工作流 URL 與後端 URL 必須為 `https://`；HTTP 在儲存或請求時阻擋 |
 | 時間表示 | 所有時間以 UTC ISO 8601 儲存；UI 顯示時轉成使用者時區 |
 | 文字渲染 | AI 回應與字幕在側邊欄一律以純文字呈現，保留換行；不解析 Markdown / HTML / script |
