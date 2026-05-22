@@ -1,8 +1,10 @@
 // Build the Web-Store-ready zip from `dist/`.
 // Reads version from package.json, asserts the bundled manifest version
 // matches, and writes `subflow-v<version>.zip` using the `archiver` Node
-// package (no dependency on the system `zip` binary). Issue #20 will
-// harden this further (typecheck/test gating, file allowlists, etc.).
+// package (no dependency on the system `zip` binary). Typecheck and
+// test gating already happens via the `npm run package` chain in
+// package.json; issue #20 will harden this further (file allowlists,
+// Web-Store size sanity check, manifest generation, etc.).
 
 import { createWriteStream, readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
