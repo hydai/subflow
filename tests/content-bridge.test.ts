@@ -17,16 +17,11 @@ const ALLOWED_CONTENT_TAGS = new Set([
   "subflow:request-reextraction",
 ]);
 
-// Strip JS/TS comments (line + block) before scanning a source file
-// for tag literals. The test's invariant is "only allow-listed tags
-// appear as runtime string values", which means comment text — even
-// if it happens to include `'subflow:…'` in an example — must not
-// fail the test or weaken the assertion.
-function stripComments(source: string): string {
-  // Order matters: block comments first so a `// foo /* still a comment` line
-  // is handled correctly.
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
-}
+// (No comment-stripping helper here — the tag scan below uses a
+// matched-quote regex that ALREADY excludes comments because comment
+// syntax doesn't begin with a string-delimiter. We keep the test
+// dependency-free rather than pulling in a TS parser for a
+// nice-to-have.)
 
 // Direct runtime imports only — `import type { … }` lines are
 // erased by the TS compiler before Rollup ever sees them, so they
@@ -44,13 +39,16 @@ function extractImportsOf(file: string): Set<string> {
 
 describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
   it("only mentions tags from the allowed set in src/content/index.ts string literals", () => {
-    const source = stripComments(
-      readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8"),
-    );
-    // Match `subflow:*` ONLY inside a string literal — double-quoted,
-    // single-quoted, or backtick-templated. Comments are stripped
-    // first (see `stripComments`) so tag tokens inside documentation
-    // can't fail the test or weaken the assertion.
+    const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
+    // Match `subflow:*` ONLY when the token is wrapped in matching
+    // quotes — `"…"`, `'…'`, or `` `…` ``. A line comment like
+    // `// see subflow:foo` doesn't satisfy the quote-pair requirement
+    // and is naturally excluded; the same goes for block comments
+    // and identifier-like tokens. The cost: a tag appearing inside
+    // documentation that itself uses matching quotes (e.g.
+    // `// "subflow:foo"`) would falsely trigger — but the file's own
+    // comments don't do that, so we accept the simple regex over a
+    // TS-AST dependency.
     const stringRe = /(["'`])(subflow:[a-zA-Z0-9_-]+)\1/g;
     const used = new Set<string>();
     for (const m of source.matchAll(stringRe)) used.add(m[2]!);
