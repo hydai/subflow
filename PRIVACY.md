@@ -2,7 +2,7 @@
 
 Subflow has no Subflow-controlled backend, no analytics, and no telemetry. The extension code runs entirely inside your browser, sees your subtitles and prompt bodies, and sends them only to the YouTube subtitle endpoint and the workflow URL you yourself configured. Because the maintainer doesn't operate a server in this picture, the maintainer has no way to read what your browser is sending or receiving.
 
-A maintainer can, however, ship new extension code in a future Chrome Web Store update. If a hostile update slipped past Chrome's review and was installed on your machine, that code would in principle have access to the same in-browser data the current extension does. The protections that follow are the contract enforced by the *current* code and reaffirmed in the SPEC; verifying any particular release matches that contract is what makes the source-available, MIT-licensed codebase auditable.
+A maintainer can, however, ship new extension code in a future Chrome Web Store update. If a hostile update slipped past Chrome's review and was installed on your machine, that code would in principle have access to the same in-browser data the current extension does. The protections that follow are the contract enforced by the *current* code and reaffirmed in the SPEC; verifying any particular release matches that contract is what makes the open-source (MIT-licensed) codebase auditable.
 
 This document describes exactly what data Subflow touches, where each piece lives, and who could see it. It mirrors the guarantees in `SPEC.md` §3 (Impacts) and §4 (Non-goals); when in doubt the SPEC is authoritative.
 
@@ -44,7 +44,7 @@ The manifest declares exactly:
 
 - `storage` — needed to read and write workflow / language settings to `chrome.storage.local`.
 - `scripting` — declared per SPEC §7.5 as a reserved permission for future dynamic script-injection paths (e.g. `chrome.scripting.executeScript`). The current implementation does not actually invoke any `chrome.scripting.*` API; static `content_scripts` declarations in `manifest.json` handle injection. If a future release ships without exercising this permission, it should be removed from the manifest.
-- `host_permissions: ["https://www.youtube.com/*"]` — needed to read subtitles from YouTube and to inject the sidebar.
+- `host_permissions: ["https://www.youtube.com/*"]` — needed for two things: (a) so the background service worker can `fetch()` the timed-text subtitle endpoint without being blocked by Chrome's same-origin policy, and (b) so the `content_scripts` declarations in `manifest.json` are permitted to inject the sidebar and main-world helper into watch pages. Note: content-script injection happens via the static `content_scripts` declarations, NOT via `chrome.scripting.*`.
 
 Subflow explicitly does **not** request `tabs`, `cookies`, `<all_urls>`, `history`, or `downloads`. SPEC §7.5 enumerates this; a test in `tests/manifest.test.ts` verifies the manifest stays this way.
 
