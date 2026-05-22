@@ -51,7 +51,14 @@ interface AppState {
   languagePriority: string[];
   edit: EditState;
   validationErrors: WorkflowValidationError[];
+  // Top-of-page banner for failures that don't belong to a single
+  // field (e.g. chrome.storage.local write failure, schema-drift on
+  // load). Field-level validation feedback goes through
+  // `validationErrors` / `languageError` instead.
   saveError: string | null;
+  // Inline error for the language-priority section. Lives next to
+  // the section per SPEC §7.6.
+  languageError: string | null;
 }
 
 const state: AppState = {
@@ -60,19 +67,65 @@ const state: AppState = {
   edit: { mode: "list" },
   validationErrors: [],
   saveError: null,
+  languageError: null,
 };
 
 void bootstrap();
 
 async function bootstrap(): Promise<void> {
   const [wfs, prefs] = await Promise.all([getWorkflows(), getPreferences()]);
-  state.workflows = wfs.ok ? wfs.value : [];
-  state.languagePriority = prefs.ok ? prefs.value.languagePriority : [];
+  // Defensive shape-checks before trusting what came out of
+  // chrome.storage.local: extension storage can be edited by the
+  // user, by other extensions sharing storage (Subflow doesn't, but
+  // future code might), or by a stale older-schema version. Coerce
+  // any unexpected shape back to a safe default and surface a
+  // top-of-page warning so the user knows the load wasn't clean.
+  let loadWarning: string | null = null;
+  if (wfs.ok) {
+    const onlyValid = wfs.value.filter(isPlausibleWorkflow);
+    state.workflows = onlyValid;
+    if (onlyValid.length !== wfs.value.length) {
+      loadWarning = "Some stored workflows were malformed and have been hidden until you re-save settings.";
+    }
+  } else {
+    state.workflows = [];
+  }
+  if (prefs.ok) {
+    const langs = prefs.value.languagePriority;
+    if (Array.isArray(langs) && langs.every((s) => typeof s === "string")) {
+      state.languagePriority = langs;
+    } else {
+      state.languagePriority = [];
+      loadWarning = loadWarning ?? "Stored language priority was malformed; reset to empty.";
+    }
+  } else {
+    state.languagePriority = [];
+  }
   if (!wfs.ok || !prefs.ok) {
     state.saveError =
       "Could not load saved settings. Showing defaults until a successful write happens.";
+  } else if (loadWarning !== null) {
+    state.saveError = loadWarning;
   }
   render();
+}
+
+// Lightweight runtime check — does NOT enforce SPEC §7.4 (validateWorkflow
+// covers that on save). Just verifies the array element is the right
+// SHAPE so the UI can render it without crashing.
+function isPlausibleWorkflow(value: unknown): value is Workflow {
+  if (value === null || typeof value !== "object") return false;
+  const w = value as Record<string, unknown>;
+  return (
+    typeof w.id === "string" &&
+    typeof w.name === "string" &&
+    typeof w.url === "string" &&
+    typeof w.promptTemplate === "string" &&
+    typeof w.autoRun === "boolean" &&
+    w.headers !== null &&
+    typeof w.headers === "object" &&
+    !Array.isArray(w.headers)
+  );
 }
 
 function render(): void {
@@ -123,6 +176,15 @@ function renderLanguageSection(): HTMLElement {
     row.append(input, up, down, del);
     list.appendChild(row);
   });
+  // Inline error for THIS section, rendered next to the inputs per
+  // SPEC §7.6 ("inline 錯誤緊鄰相關欄位"). Not folded into the
+  // top-of-page banner so the user's eye is drawn to the section
+  // they need to fix.
+  if (state.languageError !== null) {
+    list.appendChild(
+      el("p", { class: "error", role: "alert" }, state.languageError),
+    );
+  }
   const addRow = el("div", { class: "header-row" });
   const addBtn = button("Add language", () => addLang());
   addRow.appendChild(addBtn);
@@ -151,28 +213,30 @@ async function saveLanguages(): Promise<void> {
   // trimming, and the list must contain at least one entry. Blank /
   // whitespace-only entries block the save rather than getting
   // silently dropped — otherwise the user would think their entry
-  // saved when it didn't.
+  // saved when it didn't. Errors live in `state.languageError` so
+  // they render INSIDE the language section (SPEC §7.6) rather than
+  // as a global banner.
   const trimmed = state.languagePriority.map((s) => s.trim());
   if (trimmed.length === 0) {
-    state.saveError =
+    state.languageError =
       "Add at least one language code before saving (e.g. en, zh-TW).";
     render();
     return;
   }
   const blankIndex = trimmed.findIndex((s) => s.length === 0);
   if (blankIndex !== -1) {
-    state.saveError = `Language ${blankIndex + 1} is empty. Remove the blank entry or fill it in before saving.`;
+    state.languageError = `Language ${blankIndex + 1} is empty. Remove the blank entry or fill it in before saving.`;
     render();
     return;
   }
   const result = await setPreferences({ languagePriority: trimmed });
   if (!result.ok) {
-    state.saveError = `Could not save language priority: ${result.error.type}: ${result.error.message}`;
+    state.languageError = `Could not save language priority: ${result.error.type}: ${result.error.message}`;
     render();
     return;
   }
   state.languagePriority = trimmed;
-  state.saveError = null;
+  state.languageError = null;
   render();
 }
 
@@ -224,14 +288,35 @@ function moveWorkflow(from: number, to: number): void {
   const next = [...state.workflows];
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item!);
-  void persistAndCommit(next);
+  void enqueuePersist(next);
 }
 
 function deleteWorkflow(w: Workflow): void {
   const confirmed = confirm(`Delete workflow "${w.name}"?`);
   if (!confirmed) return;
   const next = state.workflows.filter((x) => x.id !== w.id);
-  void persistAndCommit(next);
+  void enqueuePersist(next);
+}
+
+// Serialise persistence calls. Rapid reorder clicks (or any
+// concurrent caller) would otherwise let two setWorkflows() promises
+// resolve out of order, committing an older `next` after a newer
+// one. The queue tracks only the LATEST pending array, so older
+// queued writes are coalesced — we don't need to ship every
+// intermediate ordering to storage, only the final one the user
+// stopped on.
+let persistQueue: Promise<void> = Promise.resolve();
+let pendingNext: Workflow[] | null = null;
+
+function enqueuePersist(next: Workflow[]): Promise<void> {
+  pendingNext = next;
+  persistQueue = persistQueue.then(async () => {
+    if (pendingNext === null) return;
+    const toWrite = pendingNext;
+    pendingNext = null;
+    await persistAndCommit(toWrite);
+  });
+  return persistQueue;
 }
 
 // SPEC §6.6 / §7.4: a failed write must NOT leave the in-memory

@@ -41,7 +41,7 @@ describe("validateWorkflow (SPEC §7.4)", () => {
     expect(errors.some((e) => e.field === "url")).toBe(false);
   });
 
-  it("rejects malformed URL (whitespace)", () => {
+  it("rejects malformed URL (unparseable string)", () => {
     const errors = validateWorkflow(workflow({ url: "not a url" }));
     expect(errors.some((e) => e.field === "url")).toBe(true);
   });
