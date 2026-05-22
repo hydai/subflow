@@ -156,6 +156,37 @@ describe("runWorkflow (SPEC §6.3 + §7.2)", () => {
     }
   });
 
+  it("returns outcome: \"aborted\" when externalSignal is already aborted before fetch starts", async () => {
+    const fetchImpl = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await runWorkflow(baseWorkflow, baseVars, {
+      fetch: fetchImpl,
+      externalSignal: controller.signal,
+    });
+    expect(result.outcome).toBe("aborted");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("returns outcome: \"aborted\" when externalSignal fires during fetch", async () => {
+    const fetchImpl = vi.fn(
+      (_url: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const promise = runWorkflow(baseWorkflow, baseVars, {
+      fetch: fetchImpl,
+      externalSignal: controller.signal,
+    });
+    controller.abort();
+    const result = await promise;
+    expect(result.outcome).toBe("aborted");
+  });
+
   it("clears the abort timer once the body has been fully read", async () => {
     const clearSpy = vi.spyOn(globalThis, "clearTimeout");
     try {

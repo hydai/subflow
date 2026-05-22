@@ -40,6 +40,13 @@ export interface WorkflowRunnerDeps {
   fetch?: typeof fetch;
   // Defaults to `Date.now`; tests can pin the timestamp.
   now?: () => number;
+  // External abort signal. When the caller aborts this signal
+  // (SPA navigation, manual cancel, etc.) the in-flight workflow
+  // request is cancelled in addition to its own internal 60-second
+  // timeout. The result will be classified as `outcome: "aborted"`
+  // so callers can distinguish caller-driven cancellation from a
+  // timeout fire.
+  externalSignal?: AbortSignal;
 }
 
 export async function runWorkflow(
@@ -61,8 +68,32 @@ export async function runWorkflow(
     "Content-Type": "application/json",
   };
 
+  // Internal controller drives the 60s timeout; external signal can
+  // also abort it. We track WHY the abort happened (timeout vs
+  // external) by inspecting deps.externalSignal.aborted at catch
+  // time — `controller.signal.reason` would be a cleaner option but
+  // is not universally supported in service-worker runtimes yet.
   const controller = new AbortController();
   const timeoutHandle = setTimeout(() => controller.abort(), WORKFLOW_TIMEOUT_MS);
+
+  // Forward external aborts (e.g. SPA navigation, #16) into our
+  // controller, and short-circuit if the signal is already aborted
+  // when we start.
+  const externalSignal = deps.externalSignal;
+  let externalAbortHandler: (() => void) | null = null;
+  if (externalSignal !== undefined) {
+    if (externalSignal.aborted) {
+      clearTimeout(timeoutHandle);
+      return abortedResult(workflow, timestamp);
+    }
+    externalAbortHandler = () => controller.abort();
+    externalSignal.addEventListener("abort", externalAbortHandler);
+  }
+  const cleanupExternal = (): void => {
+    if (externalSignal !== undefined && externalAbortHandler !== null) {
+      externalSignal.removeEventListener("abort", externalAbortHandler);
+    }
+  };
 
   let response: Response;
   try {
@@ -74,7 +105,12 @@ export async function runWorkflow(
     });
   } catch (err) {
     clearTimeout(timeoutHandle);
-    if (isAbortError(err)) return timeoutResult(workflow, timestamp);
+    cleanupExternal();
+    if (isAbortError(err)) {
+      return externalSignal?.aborted === true
+        ? abortedResult(workflow, timestamp)
+        : timeoutResult(workflow, timestamp);
+    }
     return networkErrorResult(workflow, timestamp, err);
   }
 
@@ -86,10 +122,16 @@ export async function runWorkflow(
     responseBody = await response.text();
   } catch (err) {
     clearTimeout(timeoutHandle);
-    if (isAbortError(err)) return timeoutResult(workflow, timestamp);
+    cleanupExternal();
+    if (isAbortError(err)) {
+      return externalSignal?.aborted === true
+        ? abortedResult(workflow, timestamp)
+        : timeoutResult(workflow, timestamp);
+    }
     return networkErrorResult(workflow, timestamp, err);
   }
   clearTimeout(timeoutHandle);
+  cleanupExternal();
 
   if (response.ok) {
     return {
@@ -117,6 +159,16 @@ function timeoutResult(workflow: Workflow, timestamp: number): WorkflowResult {
     workflowName: workflow.name,
     outcome: "timeout",
     body: `Request timed out after ${WORKFLOW_TIMEOUT_MS / 1000}s`,
+    timestamp,
+  };
+}
+
+function abortedResult(workflow: Workflow, timestamp: number): WorkflowResult {
+  return {
+    workflowId: workflow.id,
+    workflowName: workflow.name,
+    outcome: "aborted",
+    body: "Request aborted (SPA navigation or caller cancel).",
     timestamp,
   };
 }
