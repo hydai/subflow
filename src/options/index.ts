@@ -52,10 +52,15 @@ interface AppState {
   languagePriority: string[];
   edit: EditState;
   validationErrors: WorkflowValidationError[];
-  // Top-of-page banner for failures that don't belong to a single
-  // field (e.g. chrome.storage.local write failure, schema-drift on
-  // load). Field-level validation feedback goes through
-  // `validationErrors` / `languageError` instead.
+  // Top-of-page banner. Carries both save failures (e.g. quota
+  // exceeded on setWorkflows) and load-time warnings (e.g.
+  // "some stored workflows were malformed"). Same surface because
+  // both classes of message live "above" the user's current focus
+  // and can't be attributed to a specific field. Field-level
+  // validation feedback uses `validationErrors` / `languageError`
+  // instead. The name kept its original "saveError" for git-blame
+  // continuity — see the banner comment in renderApp() for the
+  // current contract.
   saveError: string | null;
   // Inline error for the language-priority section. Lives next to
   // the section per SPEC §7.6.
@@ -158,13 +163,21 @@ async function bootstrap(): Promise<void> {
 // Callers (so far: only bootstrap) surface a single warning to the
 // user when any entry was dropped, so they know their stored state
 // isn't fully visible until they re-save.
+// SPEC §7.4 specifies UUID v4 for workflow ids. The canonical form
+// is 8-4-4-4-12 hex digits with a "4" version nibble and a 8/9/a/b
+// variant nibble. We accept the format as written (case-insensitive)
+// without trying to validate the random bits — that's a property of
+// crypto.randomUUID and not something the loader can audit.
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 function repairWorkflow(value: unknown): Workflow | null {
   if (value === null || typeof value !== "object") return null;
   const w = value as Record<string, unknown>;
-  // SPEC §7.4: id is a UUID v4. Drop empty / non-string ids so
-  // downstream code (move / edit / delete by id) can rely on each
-  // row being uniquely addressable.
-  if (typeof w.id !== "string" || w.id.length === 0) return null;
+  // SPEC §7.4: id is a UUID v4. Drop entries whose id isn't UUID-v4
+  // shaped so downstream code (move / edit / delete by id) can rely
+  // on each row being uniquely addressable and not colliding with
+  // hand-typed strings.
+  if (typeof w.id !== "string" || !UUID_V4_RE.test(w.id)) return null;
   if (typeof w.name !== "string") return null;
   if (typeof w.url !== "string") return null;
   if (typeof w.promptTemplate !== "string") return null;
@@ -233,7 +246,16 @@ function renderLanguageSection(): HTMLElement {
     const down = iconButton("↓", `Move language ${idx + 1} down`, () =>
       moveLang(idx, idx + 1),
     );
-    const del = button("Remove", () => removeLang(idx), "danger");
+    // Disambiguate the visible "Remove" buttons for screen readers
+    // — they all share the same visible text but appear in a
+    // repeated list, so a row-scoped aria-label is needed.
+    const labelHint = lang.trim().length > 0 ? lang : `language ${idx + 1}`;
+    const del = labelledButton(
+      "Remove",
+      `Remove ${labelHint}`,
+      () => removeLang(idx),
+      "danger",
+    );
     row.append(input, up, down, del);
     list.appendChild(row);
   });
@@ -596,8 +618,11 @@ function renderHeaderRow(
     "aria-label": `Header ${idx + 1} value`,
     placeholder: "Header value",
   }) as HTMLInputElement;
-  const del = button(
+  const labelHint =
+    row.key.trim().length > 0 ? `header "${row.key}"` : `header ${idx + 1}`;
+  const del = labelledButton(
     "Remove",
+    `Remove ${labelHint}`,
     () => {
       const i = rows.findIndex((r) => r.id === row.id);
       if (i !== -1) rows.splice(i, 1);
@@ -730,6 +755,24 @@ function iconButton(
 ): HTMLElement {
   const b = el("button", { type: "button", "aria-label": ariaLabel });
   b.textContent = glyph;
+  b.addEventListener("click", () => {
+    void onClick();
+  });
+  return b;
+}
+
+// Text-labelled button with an explicit aria-label override — used
+// when the same visible text ("Remove") appears in a repeated list
+// so each instance gets a row-scoped accessible name.
+function labelledButton(
+  label: string,
+  ariaLabel: string,
+  onClick: () => void | Promise<void>,
+  variant?: "primary" | "danger",
+): HTMLElement {
+  const b = el("button", { type: "button", "aria-label": ariaLabel });
+  if (variant !== undefined) b.classList.add(variant);
+  b.textContent = label;
   b.addEventListener("click", () => {
     void onClick();
   });

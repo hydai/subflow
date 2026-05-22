@@ -73,13 +73,21 @@ textarea {
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 0.25rem;
+}
+
+/* Monospace ONLY for the URL field and the prompt-template textarea —
+   those benefit from fixed-width because they show code-like text
+   that needs character alignment. Name fields, language codes, and
+   header keys/values stay in the default UI font so users aren't
+   forced into a coding aesthetic for short labels. */
+input[type="url"],
+textarea {
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 textarea {
   min-height: 5rem;
   resize: vertical;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 input[aria-invalid="true"],

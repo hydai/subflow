@@ -53,6 +53,15 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationError[] 
 
   if (workflow.url.length === 0) {
     errors.push({ field: "url", message: "URL is required." });
+  } else if (!workflow.url.startsWith("https://")) {
+    // SPEC §7.4 says the URL string must literally begin with
+    // "https://", not merely parse to an https URL. The parser
+    // accepts shorthand like "https:example.com" (scheme-only,
+    // no //), so we gate on the string prefix BEFORE parsing.
+    errors.push({
+      field: "url",
+      message: "URL must use the https:// scheme.",
+    });
   } else {
     const parsed = safeParseUrl(workflow.url);
     if (parsed === null) {
