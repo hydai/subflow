@@ -1,0 +1,24 @@
+{
+  "name": "subflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome extension that turns YouTube subtitles into AI workflow input",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "package": "npm run typecheck && npm run test && npm run build && node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@types/archiver": "^7.0.0",
+    "@types/chrome": "^0.0.287",
+    "@types/node": "^22.10.5",
+    "archiver": "^8.0.0",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7",
+    "vitest": "^3.0.4"
+  }
+}
