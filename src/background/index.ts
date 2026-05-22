@@ -85,7 +85,35 @@ function isPlayerDataPayload(value: unknown): value is PlayerDataPayload {
   if (typeof v.href !== "string") return false;
   const result = v.result;
   if (result === null || typeof result !== "object") return false;
-  return typeof (result as { ok?: unknown }).ok === "boolean";
+  const ok = (result as { ok?: unknown }).ok;
+  if (typeof ok !== "boolean") return false;
+  if (ok === false) {
+    const error = (result as { error?: unknown }).error;
+    if (error === null || typeof error !== "object") return false;
+    return typeof (error as { type?: unknown }).type === "string";
+  }
+  // ok === true: the data side must look like ExtractedPlayerData
+  // enough that the service won't crash downstream.
+  const data = (result as { data?: unknown }).data;
+  if (data === null || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  if (!Array.isArray(d.captionTracks)) return false;
+  const vd = d.videoDetails;
+  if (vd === null || typeof vd !== "object") return false;
+  return typeof (vd as { videoId?: unknown }).videoId === "string";
+}
+
+function isFromSameHrefOrigin(href: string, sender: chrome.runtime.MessageSender): boolean {
+  // Stale extraction results from a previously-loaded page can race
+  // with a fresh sender-tab URL; require that the `href` the
+  // main-world script captured at extraction time lives under the
+  // same origin as the tab actually loaded today.
+  if (typeof sender.tab?.url !== "string") return false;
+  try {
+    return new URL(href).origin === new URL(sender.tab.url).origin;
+  } catch {
+    return false;
+  }
 }
 
 function isRequestSubtitlePayload(value: unknown): value is RequestSubtitlePayload {
@@ -118,16 +146,30 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   switch (message.type) {
     case PLAYER_DATA_POSTMESSAGE_TAG:
       if (!isPlayerDataPayload(message)) return false;
+      if (!isFromSameHrefOrigin(message.href, sender)) return false;
       subtitles.recordPlayerData(tabId, message.result);
       sendResponse({ ack: true });
       return false;
 
     case "subflow:request-subtitle":
       if (!isRequestSubtitlePayload(message)) return false;
-      void subtitles
+      subtitles
         .getSubtitle(tabId, message.videoId, message.languagePriority)
         .then((result) => {
           sendResponse({ videoId: message.videoId, result });
+        })
+        .catch((err: unknown) => {
+          // Unexpected: the service catches its own errors and
+          // returns a typed SubtitleResult. If we end up here, surface
+          // a fetch-failed result so the message port doesn't dangle
+          // and the sender's Promise settles.
+          sendResponse({
+            videoId: message.videoId,
+            result: {
+              status: "fetch-failed",
+              message: err instanceof Error ? err.message : String(err),
+            },
+          });
         });
       // Keep the message channel open so the async sendResponse fires.
       return true;

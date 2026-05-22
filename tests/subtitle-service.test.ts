@@ -29,6 +29,55 @@ const enTrack: CaptionTrack = {
 };
 
 describe("SubtitleService", () => {
+  it("returns missing-language-priority when languagePriority is empty (SPEC §6.6)", async () => {
+    const fetchSubtitleXml = vi.fn();
+    const service = new SubtitleService({ fetchSubtitleXml });
+    service.recordPlayerData(1, makePlayerData({ videoId: "abc", tracks: [enTrack] }));
+    const result = await service.getSubtitle(1, "abc", []);
+    expect(result.status).toBe("missing-language-priority");
+    expect(fetchSubtitleXml).not.toHaveBeenCalled();
+  });
+
+  it("returns live-or-premiere when videoDetails.isLive is true (SPEC §6.6)", async () => {
+    const fetchSubtitleXml = vi.fn();
+    const service = new SubtitleService({ fetchSubtitleXml });
+    service.recordPlayerData(1, {
+      ok: true,
+      data: {
+        videoDetails: { videoId: "abc", isLive: true, isUpcoming: false },
+        captionTracks: [enTrack],
+      },
+    });
+    const result = await service.getSubtitle(1, "abc", ["en"]);
+    expect(result.status).toBe("live-or-premiere");
+    expect(fetchSubtitleXml).not.toHaveBeenCalled();
+  });
+
+  it("returns live-or-premiere when videoDetails.isUpcoming is true (premiere, SPEC §6.6)", async () => {
+    const fetchSubtitleXml = vi.fn();
+    const service = new SubtitleService({ fetchSubtitleXml });
+    service.recordPlayerData(1, {
+      ok: true,
+      data: {
+        videoDetails: { videoId: "abc", isLive: false, isUpcoming: true },
+        captionTracks: [enTrack],
+      },
+    });
+    const result = await service.getSubtitle(1, "abc", ["en"]);
+    expect(result.status).toBe("live-or-premiere");
+    expect(fetchSubtitleXml).not.toHaveBeenCalled();
+  });
+
+  it("returns parse-failed when the recorded player data is for a different video", async () => {
+    const fetchSubtitleXml = vi.fn();
+    const service = new SubtitleService({ fetchSubtitleXml });
+    // Player data is for "OLD" but caller asks for "NEW" — SPA race.
+    service.recordPlayerData(1, makePlayerData({ videoId: "OLD", tracks: [enTrack] }));
+    const result = await service.getSubtitle(1, "NEW", ["en"]);
+    expect(result.status).toBe("parse-failed");
+    expect(fetchSubtitleXml).not.toHaveBeenCalled();
+  });
+
   it("returns parse-failed when no player data has been recorded yet", async () => {
     const service = new SubtitleService({ fetchSubtitleXml: vi.fn() });
     const result = await service.getSubtitle(1, "abc", ["en"]);

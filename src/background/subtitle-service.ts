@@ -68,14 +68,37 @@ export class SubtitleService {
     videoId: string,
     languagePriority: string[],
   ): Promise<SubtitleResult> {
+    // SPEC §6.6: missing language preference takes precedence over
+    // any other failure — the sidebar redirects the user to settings
+    // before we go anywhere near the player data.
+    if (languagePriority.length === 0) {
+      return failure("missing-language-priority");
+    }
+
     const state = this.touch(tabId);
     const playerData = state.playerData;
     if (playerData === null) {
       return failure("parse-failed", "player data not yet available for this tab");
     }
     if (!playerData.ok) {
-      const error = playerData.error;
-      return failure(extractErrorToStatus(error), playerData.error.type);
+      return failure(extractErrorToStatus(playerData.error), playerData.error.type);
+    }
+
+    // Guard against the SPA-navigation race where a request lands
+    // for a video whose player data has not yet replaced the
+    // previous video's. Caching for the wrong key would persist
+    // incorrect subtitles after the navigation completes.
+    if (playerData.data.videoDetails.videoId !== videoId) {
+      return failure(
+        "parse-failed",
+        "recorded player data is for a different video; waiting for re-extraction",
+      );
+    }
+
+    // SPEC §6.6: live / premiere videos surface their own dedicated
+    // status, separately from "no subtitle".
+    if (playerData.data.videoDetails.isLive || playerData.data.videoDetails.isUpcoming) {
+      return failure("live-or-premiere");
     }
 
     const selected = selectTrack(playerData.data.captionTracks, languagePriority);
