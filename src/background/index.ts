@@ -153,11 +153,15 @@ function isRequestSubtitlePayload(value: unknown): value is RequestSubtitlePaylo
   if (v.type !== "subflow:request-subtitle") return false;
   if (typeof v.videoId !== "string" || v.videoId.length === 0) return false;
   if (!Array.isArray(v.languagePriority)) return false;
-  // Reject blank / whitespace-only entries: an empty `languageCode`
-  // flows into translation derivation as `tlang=` and produces
-  // ambiguous cache keys like `<videoId>|`.
+  // Reject blank / whitespace-only entries AND entries with leading
+  // or trailing whitespace. SPEC §7.4 says storage-time validation
+  // trims; we double-check here so a forged or buggy message can't
+  // sneak a `"en "` through (which would never match tracks via the
+  // case-insensitive comparison, and would inject whitespace into
+  // both cache keys and tlang URLs).
   return v.languagePriority.every(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+    (entry): entry is string =>
+      typeof entry === "string" && entry.length > 0 && entry === entry.trim(),
   );
 }
 
