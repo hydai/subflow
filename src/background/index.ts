@@ -90,17 +90,48 @@ function isPlayerDataPayload(value: unknown): value is PlayerDataPayload {
   if (ok === false) {
     const error = (result as { error?: unknown }).error;
     if (error === null || typeof error !== "object") return false;
-    return typeof (error as { type?: unknown }).type === "string";
+    const errType = (error as { type?: unknown }).type;
+    // Restrict to the known ExtractError variants so extractErrorToStatus
+    // in the service never receives an unknown literal.
+    if (errType !== "MISSING_PLAYER_RESPONSE" && errType !== "MALFORMED_PLAYER_RESPONSE") {
+      return false;
+    }
+    if (errType === "MALFORMED_PLAYER_RESPONSE") {
+      return typeof (error as { reason?: unknown }).reason === "string";
+    }
+    return true;
   }
   // ok === true: the data side must look like ExtractedPlayerData
-  // enough that the service won't crash downstream.
+  // enough that the service won't crash downstream. We validate every
+  // field selectTrack / parseTimedText / the §6.6 precondition checks
+  // actually read.
   const data = (result as { data?: unknown }).data;
   if (data === null || typeof data !== "object") return false;
   const d = data as Record<string, unknown>;
-  if (!Array.isArray(d.captionTracks)) return false;
+  const tracks = d.captionTracks;
+  if (!Array.isArray(tracks)) return false;
+  if (!tracks.every(isCaptionTrack)) return false;
   const vd = d.videoDetails;
   if (vd === null || typeof vd !== "object") return false;
-  return typeof (vd as { videoId?: unknown }).videoId === "string";
+  const details = vd as Record<string, unknown>;
+  if (typeof details.videoId !== "string" || details.videoId.length === 0) return false;
+  if (typeof details.isLive !== "boolean") return false;
+  if (typeof details.isUpcoming !== "boolean") return false;
+  if (details.lengthSeconds !== undefined && typeof details.lengthSeconds !== "number") {
+    return false;
+  }
+  return true;
+}
+
+function isCaptionTrack(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const t = value as Record<string, unknown>;
+  if (typeof t.baseUrl !== "string") return false;
+  if (typeof t.languageCode !== "string") return false;
+  if (typeof t.isTranslatable !== "boolean") return false;
+  // `kind` is either the literal "asr" or omitted entirely.
+  if (t.kind !== undefined && t.kind !== "asr") return false;
+  return true;
 }
 
 function isFromSameHrefOrigin(href: string, sender: chrome.runtime.MessageSender): boolean {

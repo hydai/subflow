@@ -101,7 +101,21 @@ export class SubtitleService {
       return failure("live-or-premiere");
     }
 
-    const selected = selectTrack(playerData.data.captionTracks, languagePriority);
+    // selectTrack is pure but accesses `.languageCode` and `.baseUrl`
+    // on every track entry. If a malformed track somehow slipped past
+    // the inbound validator (defense in depth — the only known path
+    // would be a future code change that loosens validation), wrap
+    // the call so the service still emits a typed result rather than
+    // rejecting and bouncing to the router's safety-net catch.
+    let selected;
+    try {
+      selected = selectTrack(playerData.data.captionTracks, languagePriority);
+    } catch (err) {
+      return failure(
+        "parse-failed",
+        err instanceof Error ? err.message : "selectTrack threw on malformed caption tracks",
+      );
+    }
     if (selected === null) {
       return failure("no-subtitle");
     }
@@ -204,10 +218,17 @@ function failure(status: Exclude<SubtitleStatus, "ok">, message?: string): Subti
 function extractErrorToStatus(error: ExtractError): Exclude<SubtitleStatus, "ok"> {
   // §6.6 maps both "missing" and "malformed" player-response cases to
   // the sidebar copy "無法解析 YouTube 頁面資料"; we surface both as
-  // `parse-failed`.
+  // `parse-failed`. The default fallback exists for runtime safety:
+  // if a future ExtractError variant lands without updating this map,
+  // emit parse-failed rather than an invalid `{ status: undefined }`
+  // SubtitleResult. TypeScript will still warn on the unhandled case
+  // because the switch is no longer exhaustive over the union, but
+  // production runtime stays well-typed.
   switch (error.type) {
     case "MISSING_PLAYER_RESPONSE":
     case "MALFORMED_PLAYER_RESPONSE":
+      return "parse-failed";
+    default:
       return "parse-failed";
   }
 }
