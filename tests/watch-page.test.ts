@@ -36,6 +36,11 @@ describe("parseWatchPageUrl (SPEC §6.4)", () => {
     expect(parseWatchPageUrl("https://youtube.com/watch?v=abc")).toBeNull();
   });
 
+  it("returns null for non-https schemes (matches manifest host_permissions)", () => {
+    expect(parseWatchPageUrl("http://www.youtube.com/watch?v=abc")).toBeNull();
+    expect(parseWatchPageUrl("ftp://www.youtube.com/watch?v=abc")).toBeNull();
+  });
+
   it("returns null for malformed URLs", () => {
     expect(parseWatchPageUrl("not a url")).toBeNull();
     expect(parseWatchPageUrl("")).toBeNull();

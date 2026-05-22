@@ -19,12 +19,11 @@ export function parseWatchPageUrl(href: string): WatchPageInfo | null {
   } catch {
     return null;
   }
-  // Only the canonical YouTube watch route counts. /shorts/<id>,
-  // /channel/<id>, /, /results, etc. all fall through here.
-  if (url.pathname !== "/watch") return null;
-  // YouTube ignores anything but the `www.youtube.com` host on the
-  // watch route. Match the manifest's host_permissions exactly.
+  // Match the manifest's host_permissions exactly: https only,
+  // www.youtube.com host, /watch path.
+  if (url.protocol !== "https:") return null;
   if (url.hostname !== "www.youtube.com") return null;
+  if (url.pathname !== "/watch") return null;
   const videoId = url.searchParams.get("v");
   if (videoId === null || videoId.length === 0) return null;
   return { videoId };
