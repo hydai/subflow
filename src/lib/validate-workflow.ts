@@ -76,6 +76,21 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationError[] 
     });
   }
 
+  // Reject non-string header values. The Workflow type pins
+  // headers to `Record<string, string>`, but at runtime the value
+  // can arrive from chrome.storage.local where users / older
+  // schemas may have written booleans / numbers / nested objects.
+  // Sending those to fetch() would either crash or silently
+  // coerce, so block the save here.
+  for (const [key, value] of Object.entries(workflow.headers)) {
+    if (typeof value !== "string") {
+      errors.push({
+        field: "headers",
+        message: `Header "${key}" has a non-string value (${typeof value}). All header values must be strings.`,
+      });
+    }
+  }
+
   return errors;
 }
 

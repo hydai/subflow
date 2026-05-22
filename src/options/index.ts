@@ -112,20 +112,24 @@ async function bootstrap(): Promise<void> {
 
 // Lightweight runtime check — does NOT enforce SPEC §7.4 (validateWorkflow
 // covers that on save). Just verifies the array element is the right
-// SHAPE so the UI can render it without crashing.
+// SHAPE so the UI can render it without crashing. Includes header
+// value-type check so non-string values can't sneak into the editor
+// and get round-tripped back to storage on save.
 function isPlausibleWorkflow(value: unknown): value is Workflow {
   if (value === null || typeof value !== "object") return false;
   const w = value as Record<string, unknown>;
-  return (
-    typeof w.id === "string" &&
-    typeof w.name === "string" &&
-    typeof w.url === "string" &&
-    typeof w.promptTemplate === "string" &&
-    typeof w.autoRun === "boolean" &&
-    w.headers !== null &&
-    typeof w.headers === "object" &&
-    !Array.isArray(w.headers)
-  );
+  if (typeof w.id !== "string") return false;
+  if (typeof w.name !== "string") return false;
+  if (typeof w.url !== "string") return false;
+  if (typeof w.promptTemplate !== "string") return false;
+  if (typeof w.autoRun !== "boolean") return false;
+  if (w.headers === null || typeof w.headers !== "object" || Array.isArray(w.headers)) {
+    return false;
+  }
+  for (const v of Object.values(w.headers as Record<string, unknown>)) {
+    if (typeof v !== "string") return false;
+  }
+  return true;
 }
 
 function render(): void {
@@ -170,8 +174,12 @@ function renderLanguageSection(): HTMLElement {
     input.addEventListener("input", () => {
       state.languagePriority[idx] = input.value;
     });
-    const up = button("↑", () => moveLang(idx, idx - 1));
-    const down = button("↓", () => moveLang(idx, idx + 1));
+    const up = iconButton("↑", `Move language ${idx + 1} up`, () =>
+      moveLang(idx, idx - 1),
+    );
+    const down = iconButton("↓", `Move language ${idx + 1} down`, () =>
+      moveLang(idx, idx + 1),
+    );
     const del = button("Remove", () => removeLang(idx), "danger");
     row.append(input, up, down, del);
     list.appendChild(row);
@@ -275,8 +283,12 @@ function renderWorkflowRow(w: Workflow, idx: number): HTMLElement {
   }
   const urlDiv = el("div", { class: "url" }, w.url);
   meta.append(nameSpan, urlDiv);
-  const up = button("↑", () => moveWorkflow(idx, idx - 1));
-  const down = button("↓", () => moveWorkflow(idx, idx + 1));
+  const up = iconButton("↑", `Move workflow "${w.name}" up`, () =>
+    moveWorkflow(idx, idx - 1),
+  );
+  const down = iconButton("↓", `Move workflow "${w.name}" down`, () =>
+    moveWorkflow(idx, idx + 1),
+  );
   const edit = button("Edit", () => startEdit(w));
   const del = button("Delete", () => deleteWorkflow(w), "danger");
   li.append(meta, up, down, edit, del);
@@ -284,8 +296,14 @@ function renderWorkflowRow(w: Workflow, idx: number): HTMLElement {
 }
 
 function moveWorkflow(from: number, to: number): void {
-  if (to < 0 || to >= state.workflows.length) return;
-  const next = [...state.workflows];
+  // Base each successive mutation on the most recent PENDING value
+  // rather than the still-committed `state.workflows`. Otherwise
+  // rapid clicks would each compute their `next` from the original
+  // ordering and "race" the slower writes back to old positions.
+  // `pendingNext` reflects the latest unsaved-but-being-saved array.
+  const base = pendingNext ?? state.workflows;
+  if (to < 0 || to >= base.length) return;
+  const next = [...base];
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item!);
   void enqueuePersist(next);
@@ -294,7 +312,8 @@ function moveWorkflow(from: number, to: number): void {
 function deleteWorkflow(w: Workflow): void {
   const confirmed = confirm(`Delete workflow "${w.name}"?`);
   if (!confirmed) return;
-  const next = state.workflows.filter((x) => x.id !== w.id);
+  const base = pendingNext ?? state.workflows;
+  const next = base.filter((x) => x.id !== w.id);
   void enqueuePersist(next);
 }
 
@@ -358,10 +377,15 @@ function startEdit(w: Workflow): void {
   state.edit = {
     mode: "edit",
     draft: { ...w, headers: { ...w.headers } },
+    // Coerce header values to strings defensively. The Workflow type
+    // says `Record<string, string>` but loading malformed stored
+    // data can violate that; converting here means the user sees
+    // SOMETHING they can edit rather than having `[object Object]`
+    // round-tripped back to storage.
     headerRows: Object.entries(w.headers).map(([key, value]) => ({
       id: crypto.randomUUID(),
       key,
-      value,
+      value: typeof value === "string" ? value : String(value),
     })),
     isNew: false,
   };
@@ -595,6 +619,22 @@ function button(
   const b = el("button", { type: "button" });
   if (variant !== undefined) b.classList.add(variant);
   b.textContent = label;
+  b.addEventListener("click", () => {
+    void onClick();
+  });
+  return b;
+}
+
+// Icon-only button (e.g. up/down arrows). The visible glyph is
+// ambiguous on its own, so screen readers get a real description
+// via aria-label.
+function iconButton(
+  glyph: string,
+  ariaLabel: string,
+  onClick: () => void | Promise<void>,
+): HTMLElement {
+  const b = el("button", { type: "button", "aria-label": ariaLabel });
+  b.textContent = glyph;
   b.addEventListener("click", () => {
     void onClick();
   });
