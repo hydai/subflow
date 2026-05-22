@@ -54,11 +54,24 @@ function decodeEntities(text: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_, dec: string) =>
-      String.fromCodePoint(Number.parseInt(dec, 10)),
+    .replace(/&#(\d+);/g, (raw, dec: string) =>
+      safeFromCodePoint(Number.parseInt(dec, 10), raw),
     )
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex: string) =>
-      String.fromCodePoint(Number.parseInt(hex, 16)),
+    .replace(/&#x([0-9a-fA-F]+);/g, (raw, hex: string) =>
+      safeFromCodePoint(Number.parseInt(hex, 16), raw),
     )
     .replace(/&amp;/g, "&");
+}
+
+// `String.fromCodePoint` throws a `RangeError` on values outside the
+// valid Unicode range (0…0x10FFFF). Network payloads occasionally
+// carry malformed numeric references, so fall back to leaving the
+// reference literal in place rather than crashing the whole parse.
+function safeFromCodePoint(code: number, raw: string): string {
+  if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return raw;
+  try {
+    return String.fromCodePoint(code);
+  } catch {
+    return raw;
+  }
 }

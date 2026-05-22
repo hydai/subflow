@@ -47,9 +47,9 @@ describe("parseTimedText (SPEC §6.1.5 + §7.3)", () => {
 
   it("returns transcript with `\\n`-separated lines, no timestamps", () => {
     const { transcript } = parseTimedText(sampleXml, 600);
-    expect(transcript).toBe(`First line
-Second line with & ampersand
-<tag> and "quotes"`);
+    expect(transcript).toBe(
+      ["First line", "Second line with & ampersand", '<tag> and "quotes"'].join("\n"),
+    );
   });
 
   it("returns two empty strings when the XML has no <text> elements", () => {
@@ -72,17 +72,23 @@ Second line with & ampersand
       <text start="60" dur="1">at 1m</text>
       <text start="3600" dur="1">at 1h</text>
     </transcript>`;
-    // Long video: every line should use [hh:mm:ss].
+    // Long video: every line uses [hh:mm:ss]. The 3600s line is exactly
+    // `[01:00:00]`.
     const long = parseTimedText(xml, 3600);
-    for (const line of long.transcriptWithTimestamps.split("\n")) {
-      expect(line).toMatch(/^\[\d{2}:\d{2}:\d{2}\] /);
-    }
-    // Short video: every line should use [mm:ss], even the one at 3600s.
+    expect(long.transcriptWithTimestamps.split("\n")).toEqual([
+      "[00:00:59] just before 1m",
+      "[00:01:00] at 1m",
+      "[01:00:00] at 1h",
+    ]);
+    // Short video: every line uses [mm:ss], even the one at 3600s.
+    // The mm field extends naturally to two-or-more digits so 3600s
+    // renders as `[60:00]`, not the collapsed `[00:00]`.
     const short = parseTimedText(xml, 600);
-    for (const line of short.transcriptWithTimestamps.split("\n")) {
-      expect(line).toMatch(/^\[\d{2}:\d{2}\] /);
-      expect(line).not.toMatch(/^\[\d{2}:\d{2}:\d{2}\] /);
-    }
+    expect(short.transcriptWithTimestamps.split("\n")).toEqual([
+      "[00:59] just before 1m",
+      "[01:00] at 1m",
+      "[60:00] at 1h",
+    ]);
   });
 
   it("floors fractional start values to whole seconds", () => {
@@ -93,5 +99,13 @@ Second line with & ampersand
   it("decodes numeric character references", () => {
     const xml = `<transcript><text start="0" dur="1">&#39; and &#x27;</text></transcript>`;
     expect(parseTimedText(xml, 600).transcript).toBe("' and '");
+  });
+
+  it("leaves malformed numeric character references in place instead of throwing", () => {
+    // 0x110000 is one past the Unicode max (0x10FFFF); fromCodePoint
+    // would throw. The parser must keep going and emit the entity
+    // verbatim so a single bad reference doesn't lose the whole line.
+    const xml = `<transcript><text start="0" dur="1">x &#x110000; y</text></transcript>`;
+    expect(parseTimedText(xml, 600).transcript).toBe("x &#x110000; y");
   });
 });

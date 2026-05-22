@@ -25,4 +25,13 @@ describe("formatTimestamp (SPEC §7.3)", () => {
   it("formats 60s without hours as 01:00", () => {
     expect(formatTimestamp(60, false)).toBe("01:00");
   });
+
+  it("renders mm:ss mode timestamps ≥ 60 minutes by extending mm naturally", () => {
+    // If a caption start exceeds 60 minutes while the per-video format
+    // is still mm:ss (duration was < 1h, or the start is wrong), the
+    // mm field must not roll back to 00 — that would silently collapse
+    // 60:00 into the same string as 00:00.
+    expect(formatTimestamp(3600, false)).toBe("60:00");
+    expect(formatTimestamp(7000, false)).toBe("116:40");
+  });
 });
