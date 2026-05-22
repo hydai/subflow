@@ -1,6 +1,8 @@
 # Privacy
 
-Subflow is designed so that the extension developer (and any future maintainer) has no technical ability to see your data — there's nothing for us to leak because nothing flows through us.
+Subflow has no Subflow-controlled backend, no analytics, and no telemetry. The extension code runs entirely inside your browser, sees your subtitles and prompt bodies, and sends them only to the YouTube subtitle endpoint and the workflow URL you yourself configured. Because the maintainer doesn't operate a server in this picture, the maintainer has no way to read what your browser is sending or receiving.
+
+A maintainer can, however, ship new extension code in a future Chrome Web Store update. If a hostile update slipped past Chrome's review and was installed on your machine, that code would in principle have access to the same in-browser data the current extension does. The protections that follow are the contract enforced by the *current* code and reaffirmed in the SPEC; verifying any particular release matches that contract is what makes the source-available, MIT-licensed codebase auditable.
 
 This document describes exactly what data Subflow touches, where each piece lives, and who could see it. It mirrors the guarantees in `SPEC.md` §3 (Impacts) and §4 (Non-goals); when in doubt the SPEC is authoritative.
 
@@ -45,7 +47,7 @@ The manifest declares exactly:
 
 Subflow explicitly does **not** request `tabs`, `cookies`, `<all_urls>`, `history`, or `downloads`. SPEC §7.5 enumerates this; a test in `tests/manifest.test.ts` verifies the manifest stays this way.
 
-Workflow POSTs to user-configured URLs do NOT require an additional `host_permissions` entry. Chrome MV3 background service workers can issue `fetch()` to any HTTPS origin; the target endpoint is reachable as long as it returns CORS headers permitting Subflow's `chrome-extension://<id>` origin. This means a workflow URL is approved by the user once (in the options page) and never elevated into a host permission — the extension's promiscuous reach is bounded by the CORS contract on the receiving side, not by anything Subflow grants itself.
+Workflow POSTs to user-configured URLs do NOT require an additional `host_permissions` entry. Chrome MV3 background service workers can issue `fetch()` to any HTTPS origin; the target endpoint is reachable as long as it returns CORS headers permitting Subflow's `chrome-extension://<id>` origin. In practice this means the target endpoint must answer a CORS preflight `OPTIONS` request with `Access-Control-Allow-Origin: chrome-extension://<id>` (or a wildcard), `Access-Control-Allow-Methods: POST, OPTIONS`, and `Access-Control-Allow-Headers` listing `Content-Type` and any auth header names the workflow configures. The user approves the workflow URL once in the options page; it is never elevated into a host permission, so the extension's reach is bounded by the receiving server's CORS contract rather than by anything Subflow grants itself.
 
 ## Subtitle data
 
