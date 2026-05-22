@@ -1,6 +1,6 @@
 # Subflow manual QA checklist
 
-A single-pass acceptance checklist for shipping a Subflow release to the Chrome Web Store. Every item below corresponds to a SPEC section; the goal is to exercise every user journey from §5.2 and every error scenario from §6.6 on a real Chrome (and a real Microsoft Edge) build.
+A single-pass acceptance checklist for shipping a Subflow release to the Chrome Web Store. The "User journeys" and "Error scenarios" sections trace SPEC §5.2 and §6.6 directly; the "Cross-browser" and "Edge cases" sections are additional release-engineering smoke tests that are NOT enumerated in the SPEC but cover deployment realities (parity with Edge stable; long videos; cache isolation).
 
 > Use a clean Chrome profile so that pre-existing `chrome.storage.local` state from prior runs does not affect outcomes. Reset between sections by either uninstalling/reinstalling the unpacked extension or by clearing storage from `chrome://extensions/` → Subflow → "Inspect views: service worker" → console → `chrome.storage.local.clear()`.
 
@@ -49,7 +49,7 @@ A single-pass acceptance checklist for shipping a Subflow release to the Chrome 
 
 ## Error scenarios (SPEC §6.6)
 
-For each row, set up the trigger, then verify the sidebar message matches the expected copy AND that no toast / `chrome.notifications` / `alert()` / console error is used to surface the failure (SPEC §7.6).
+For each row, set up the trigger, then verify the sidebar message matches the corresponding SPEC §6.6 row AND that no toast / `chrome.notifications` / `alert()` / console error is used to surface the failure (SPEC §7.6). The strings in the "Expected sidebar state" column below are paraphrases — the canonical user-facing copy lives in SPEC §6.6 and the source files that render it ([#17](https://github.com/hydai/subflow/issues/17) / [#18](https://github.com/hydai/subflow/issues/18)). If you spot a discrepancy between the checklist paraphrase and the rendered string, the SPEC + actual code is authoritative.
 
 | Scenario | Trigger | Expected sidebar state |
 | --- | --- | --- |
@@ -79,5 +79,5 @@ For each row, set up the trigger, then verify the sidebar message matches the ex
 - [ ] 3-hour video (e.g. a TED Talks playlist long-form): subtitle download completes; `{{transcript_with_timestamps}}` uses `[hh:mm:ss]` consistently; workflow request body ≤ 1 MB or whatever your endpoint accepts.
 - [ ] Video with both human and ASR caption tracks in the same language: human is selected (verify in DevTools that the timed-text URL used does NOT include `kind=asr`).
 - [ ] Video with translatable tracks but no direct-language match: a translation-derived track is selected with `tlang=` appended to the URL.
-- [ ] Opening 10 watch tabs in parallel and triggering a workflow in each: each tab has its own subtitle cache (no cross-tab sharing); the service worker handles requests serially without dropping any.
+- [ ] Opening 10 watch tabs in parallel and triggering a workflow in each: each tab has its own subtitle cache (no cross-tab sharing); the service worker accepts every request and dispatches them concurrently (SPEC §6.5 / §6.7 — no client-side serialization or rate-limit).
 - [ ] Closing a tab mid-fetch: the background releases the per-tab cache (verify in the service worker console).
