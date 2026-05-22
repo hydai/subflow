@@ -215,9 +215,24 @@ function isWorkflow(value: unknown): value is Workflow {
   if (typeof w.id !== "string" || w.id.length === 0) return false;
   if (typeof w.name !== "string" || w.name.length === 0) return false;
   if (typeof w.url !== "string" || !w.url.startsWith("https://")) return false;
-  if (typeof w.promptTemplate !== "string") return false;
+  // SPEC §7.4: promptTemplate is required AND non-empty. An empty
+  // template would POST `{"prompt": ""}`, which is a bug, not a
+  // configuration option.
+  if (typeof w.promptTemplate !== "string" || w.promptTemplate.length === 0) {
+    return false;
+  }
   if (typeof w.autoRun !== "boolean") return false;
-  if (w.headers === null || typeof w.headers !== "object") return false;
+  // Arrays satisfy `typeof === "object"` but their numeric-string
+  // keys would be spread into request headers as `"0"`, `"1"`, …,
+  // which doesn't match the `Record<string, string>` contract.
+  // Reject them explicitly.
+  if (
+    w.headers === null ||
+    typeof w.headers !== "object" ||
+    Array.isArray(w.headers)
+  ) {
+    return false;
+  }
   const headers = w.headers as Record<string, unknown>;
   for (const key of Object.keys(headers)) {
     if (typeof headers[key] !== "string") return false;

@@ -98,7 +98,14 @@ export async function runWorkflow(
     externalAbortHandler = () => {
       // Only flip if the timeout didn't beat us to it. Once
       // `timedOut === true`, the result classification is locked.
-      if (!timedOut) externallyAborted = true;
+      if (!timedOut) {
+        externallyAborted = true;
+        // Stop the timer too — once external abort has won, leaving
+        // a stale timeout armed could still flip `timedOut` later
+        // (e.g. fetch hasn't yet rejected) and misreport the result
+        // as a timeout.
+        clearTimeout(timeoutHandle);
+      }
       controller.abort();
     };
     externalSignal.addEventListener("abort", externalAbortHandler);
