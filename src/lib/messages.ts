@@ -5,8 +5,7 @@
 // is not maintained between calls.
 
 import type {
-  ExtractError,
-  ExtractedPlayerData,
+  ExtractResult,
   PromptVariables,
   SidebarState,
   SubtitleResult,
@@ -31,9 +30,10 @@ export interface PlayerDataExtractedMessage {
   // The video URL at the moment of extraction, so the receiver can
   // double-check the message belongs to the current navigation.
   href: string;
-  result:
-    | { ok: true; data: ExtractedPlayerData }
-    | { ok: false; error: ExtractError };
+  // Mirrors the extractor's return type so any future contract change
+  // (new failure variants, additional fields) propagates here without
+  // a parallel edit.
+  result: ExtractResult;
 }
 
 // Content → background: ask for the subtitle for the current video.

@@ -12,10 +12,16 @@ describe("content-script bridge wiring (SPEC §6.1.1, #4)", () => {
   // will forward. Any page-world script can call window.postMessage,
   // so widening the bridge to forward arbitrary `subflow:*` envelopes
   // would let unrelated page scripts spam the background. Keep the
-  // whitelist exact.
-  it("whitelists only the canonical player-data postMessage tag in content.ts", () => {
+  // whitelist exact: this test asserts that the canonical tag appears
+  // AND that no other `subflow:` literal sneaks in alongside it. If a
+  // future variant is added, the developer must update both this list
+  // and src/lib/messages.ts deliberately.
+  it("whitelists exactly the canonical player-data postMessage tag in content.ts", () => {
     const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
     expect(source).toContain(`"${PLAYER_DATA_POSTMESSAGE_TAG}"`);
+
+    const literals = source.match(/"subflow:[^"]*"/g) ?? [];
+    expect(literals).toEqual([`"${PLAYER_DATA_POSTMESSAGE_TAG}"`]);
   });
 
   // The main-world content script deliberately inlines the postMessage

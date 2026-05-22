@@ -30,7 +30,17 @@ declare global {
 // script load. Tests assert the two stay in sync.
 const POST_MESSAGE_TAG = "subflow:player-data-extracted" as const;
 
-if (typeof window !== "undefined" && typeof window.postMessage === "function") {
+// Watch-page guard: the manifest matches all of www.youtube.com/*,
+// but `ytInitialPlayerResponse` is only populated on the watch route
+// (SPEC §5.1.1 / §6.1). Running extraction on /, /shorts/*, /channel/*
+// etc. just emits a guaranteed MISSING_PLAYER_RESPONSE error and
+// spams the bridge with results the rest of the extension has no use
+// for, so skip the postMessage entirely on those routes.
+if (
+  typeof window !== "undefined" &&
+  typeof window.postMessage === "function" &&
+  window.location.pathname === "/watch"
+) {
   const result = extractPlayerData(window.ytInitialPlayerResponse);
   window.postMessage(
     {
