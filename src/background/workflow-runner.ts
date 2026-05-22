@@ -128,20 +128,7 @@ export async function runWorkflow(
     clearTimeout(timeoutHandle);
     cleanupExternal();
     if (isAbortError(err)) {
-      // Three classifications, in priority order:
-      //   1. Internal timeout fired → "timeout" (wins even if an
-      //      external abort also arrives — once the timer fires,
-      //      the request DID time out).
-      //   2. External signal aborted but no timeout → "aborted".
-      //   3. Neither flag set (e.g. a runtime-injected AbortError
-      //      from a tab unload, or a test that throws an
-      //      AbortError-shaped object directly) → "timeout".
-      //      This matches the runner's pre-#16 behavior: any
-      //      AbortError of unknown origin was historically
-      //      treated as the timeout path.
-      if (timedOut) return timeoutResult(workflow, timestamp);
-      if (externallyAborted) return abortedResult(workflow, timestamp);
-      return timeoutResult(workflow, timestamp);
+      return classifyAbort(workflow, timestamp, timedOut, externallyAborted);
     }
     return networkErrorResult(workflow, timestamp, err);
   }
@@ -156,20 +143,7 @@ export async function runWorkflow(
     clearTimeout(timeoutHandle);
     cleanupExternal();
     if (isAbortError(err)) {
-      // Three classifications, in priority order:
-      //   1. Internal timeout fired → "timeout" (wins even if an
-      //      external abort also arrives — once the timer fires,
-      //      the request DID time out).
-      //   2. External signal aborted but no timeout → "aborted".
-      //   3. Neither flag set (e.g. a runtime-injected AbortError
-      //      from a tab unload, or a test that throws an
-      //      AbortError-shaped object directly) → "timeout".
-      //      This matches the runner's pre-#16 behavior: any
-      //      AbortError of unknown origin was historically
-      //      treated as the timeout path.
-      if (timedOut) return timeoutResult(workflow, timestamp);
-      if (externallyAborted) return abortedResult(workflow, timestamp);
-      return timeoutResult(workflow, timestamp);
+      return classifyAbort(workflow, timestamp, timedOut, externallyAborted);
     }
     return networkErrorResult(workflow, timestamp, err);
   }
@@ -194,6 +168,28 @@ export async function runWorkflow(
     body: truncate(responseBody, ERROR_BODY_CHAR_LIMIT),
     timestamp,
   };
+}
+
+// Convert the (timedOut, externallyAborted) pair into the right
+// WorkflowResult variant. Priority:
+//   1. Internal timeout fired → "timeout" (wins even if an external
+//      abort also arrived — once the timer fires, the request DID
+//      time out).
+//   2. External signal aborted, no timeout → "aborted".
+//   3. Neither flag set (e.g. a runtime-injected AbortError from a
+//      tab unload, or a test that throws an AbortError-shaped
+//      object directly) → "timeout". Matches the runner's pre-#16
+//      behavior: any AbortError of unknown origin is the timeout
+//      path.
+function classifyAbort(
+  workflow: Workflow,
+  timestamp: number,
+  timedOut: boolean,
+  externallyAborted: boolean,
+): WorkflowResult {
+  if (timedOut) return timeoutResult(workflow, timestamp);
+  if (externallyAborted) return abortedResult(workflow, timestamp);
+  return timeoutResult(workflow, timestamp);
 }
 
 function timeoutResult(workflow: Workflow, timestamp: number): WorkflowResult {

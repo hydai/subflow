@@ -18,16 +18,19 @@ const workflowB: Workflow = {
   autoRun: true,
   headers: {},
 };
-const vars: PromptVariables = {
-  transcript: "hi",
-  transcript_with_timestamps: "[00:00] hi",
-  title: "t",
-  video_id: "abc",
-  video_url: "https://www.youtube.com/watch?v=abc",
-  channel: "c",
-  language: "en",
-  duration_seconds: 10,
-};
+function varsFor(videoId: string): PromptVariables {
+  return {
+    transcript: "hi",
+    transcript_with_timestamps: "[00:00] hi",
+    title: "t",
+    video_id: videoId,
+    video_url: `https://www.youtube.com/watch?v=${videoId}`,
+    channel: "c",
+    language: "en",
+    duration_seconds: 10,
+  };
+}
+const vars = varsFor("abc");
 
 function okResult(workflow: Workflow): WorkflowResult {
   return {
@@ -71,8 +74,8 @@ describe("WorkflowOrchestrator (SPEC §6.5 + §6.7)", () => {
   it("autoRun isolation: same workflow, different video still fires", async () => {
     const runner = vi.fn(async (wf) => okResult(wf));
     const orch = new WorkflowOrchestrator({ runWorkflow: runner });
-    await orch.runAutoRun(1, "abc", workflowA, vars);
-    await orch.runAutoRun(1, "def", workflowA, vars);
+    await orch.runAutoRun(1, "abc", workflowA, varsFor("abc"));
+    await orch.runAutoRun(1, "def", workflowA, varsFor("def"));
     expect(runner).toHaveBeenCalledTimes(2);
   });
 
@@ -87,13 +90,13 @@ describe("WorkflowOrchestrator (SPEC §6.5 + §6.7)", () => {
   it("autoRun history persists across SPA navigations (going back doesn't re-fire)", async () => {
     const runner = vi.fn(async (wf) => okResult(wf));
     const orch = new WorkflowOrchestrator({ runWorkflow: runner });
-    await orch.runAutoRun(1, "abc", workflowA, vars);
+    await orch.runAutoRun(1, "abc", workflowA, varsFor("abc"));
     // SPA navigation triggers abortInFlight, but autoRunFired persists.
     orch.abortInFlight(1);
-    await orch.runAutoRun(1, "def", workflowA, vars);
+    await orch.runAutoRun(1, "def", workflowA, varsFor("def"));
     // Back-navigate to abc.
     orch.abortInFlight(1);
-    const reFire = await orch.runAutoRun(1, "abc", workflowA, vars);
+    const reFire = await orch.runAutoRun(1, "abc", workflowA, varsFor("abc"));
     expect(reFire).toBeNull();
     expect(runner).toHaveBeenCalledTimes(2); // abc + def, not abc again
   });
