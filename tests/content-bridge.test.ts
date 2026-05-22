@@ -16,10 +16,14 @@ const ALLOWED_CONTENT_TAGS = new Set([
   "subflow:video-changed",
 ]);
 
+// Direct runtime imports only — `import type { … }` lines are
+// erased by the TS compiler before Rollup ever sees them, so they
+// can't cause a shared chunk and should NOT count toward the
+// classic-script overlap check below.
 function extractImportsOf(file: string): Set<string> {
   const source = readFileSync(resolve(repoRoot, file), "utf8");
   const imports = new Set<string>();
-  const importRe = /^import\s+(?:[^"']+\s+from\s+)?["']([^"']+)["']/gm;
+  const importRe = /^import\s+(?!type\s)(?:[^"']+\s+from\s+)?["']([^"']+)["']/gm;
   for (const m of source.matchAll(importRe)) {
     imports.add(m[1]!);
   }
@@ -27,15 +31,15 @@ function extractImportsOf(file: string): Set<string> {
 }
 
 describe("content-script bridge wiring (SPEC §6.1.1, #4 + §6.4, #11)", () => {
-  it("only mentions tags from the allowed set in src/content/index.ts", () => {
+  it("only mentions tags from the allowed set in src/content/index.ts string literals", () => {
     const source = readFileSync(resolve(repoRoot, "src/content/index.ts"), "utf8");
-    // Match every `subflow:*` occurrence regardless of quote style —
-    // double-quoted, single-quoted, or backtick-templated. The
-    // assertion enforces the invariant that ONLY allow-listed tags
-    // appear in this file; quoting flexibility shouldn't be an escape
-    // hatch.
-    const literals = source.match(/subflow:[a-zA-Z0-9_-]+/g) ?? [];
-    const used = new Set(literals);
+    // Match `subflow:*` ONLY inside a string literal — double-quoted,
+    // single-quoted, or backtick-templated. Comments and identifiers
+    // are deliberately excluded so this test enforces "what gets
+    // emitted at runtime" rather than "what appears in source text".
+    const stringRe = /(["'`])(subflow:[a-zA-Z0-9_-]+)\1/g;
+    const used = new Set<string>();
+    for (const m of source.matchAll(stringRe)) used.add(m[2]!);
     for (const tag of used) {
       expect(ALLOWED_CONTENT_TAGS.has(tag)).toBe(true);
     }

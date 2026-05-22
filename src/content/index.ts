@@ -62,37 +62,43 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
 
 // Module-scoped: survives `yt-navigate-finish` event fires so we can
 // distinguish "first injection on this page" from "SPA-switched to a
-// different video". Both `videoId` and the DOM root are tracked
-// together since they always change in lock-step.
-let currentVideoId: string | null = null;
+// different video".
+//
+// `lastVideoId` persists ACROSS unmount events. Leaving /watch and
+// later coming back to a different video is semantically the same as
+// SPA-navigating from videoA → videoB: the background still needs a
+// `subflow:video-changed` so SubtitleService.changeVideo can prune the
+// old video's cache entries. Resetting on unmount would suppress that
+// message and let stale cache accumulate across navigation cycles.
+let lastVideoId: string | null = null;
 let sidebarRoot: HTMLElement | null = null;
 
 function syncSidebar(): void {
   const info = parseWatchPageUrl(window.location.href);
   if (info === null) {
-    // Off the watch route — remove the sidebar entirely. The content
-    // script keeps running because YouTube SPA navigation never
-    // re-injects content scripts.
+    // Off the watch route — remove the sidebar but keep `lastVideoId`
+    // so a return to /watch with a different id still triggers
+    // video-changed.
     if (sidebarRoot !== null) {
       sidebarRoot.remove();
       sidebarRoot = null;
     }
-    currentVideoId = null;
     return;
   }
 
   if (sidebarRoot === null) {
     sidebarRoot = createSidebarRoot();
     document.body.appendChild(sidebarRoot);
-    currentVideoId = info.videoId;
-    return;
   }
 
-  if (info.videoId !== currentVideoId) {
-    // SPA navigated to a different video. Keep the sidebar but tell
-    // the background to drop cache entries for the previous video
-    // (SubtitleService.changeVideo from #7).
-    currentVideoId = info.videoId;
+  if (info.videoId !== lastVideoId) {
+    // First sight of this videoId in this tab, OR a SPA navigation
+    // to a different video. Either way, tell the background so
+    // SubtitleService.changeVideo (#7) can prune cache entries for
+    // the previous video. The very first observation in a tab —
+    // before any cache exists — is harmless: changeVideo on an empty
+    // tab state is a no-op.
+    lastVideoId = info.videoId;
     void chrome.runtime.sendMessage({
       type: "subflow:video-changed",
       videoId: info.videoId,
@@ -124,8 +130,10 @@ syncSidebar();
 // directly is much cheaper than polling.
 document.addEventListener("yt-navigate-finish", syncSidebar);
 
-// Browser-level fallback in case YouTube changes their event name. A
-// `popstate` covers back/forward; we also poll the URL on each event
-// to catch the cases that don't dispatch popstate (e.g. internal
-// history.pushState followed by no further navigation event).
+// Browser-level fallback in case YouTube changes their event name.
+// `popstate` covers back / forward navigation. We deliberately do NOT
+// patch History.pushState or run a polling loop here — the
+// `yt-navigate-finish` listener above already fires on every YouTube
+// SPA transition (including ones triggered by pushState), so adding
+// a polling fallback would be redundant noise.
 window.addEventListener("popstate", syncSidebar);
