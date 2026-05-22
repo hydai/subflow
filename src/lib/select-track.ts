@@ -68,37 +68,35 @@ function findTranslationMatch(
   tracks: CaptionTrack[],
   preferredLanguage: string,
 ): SelectedTrack | null {
-  let humanIndex = -1;
-  let autoIndex = -1;
-  for (let i = 0; i < tracks.length; i++) {
-    const t = tracks[i]!;
+  // Collect translatable candidates in priority order: every human
+  // track first (in array order), then every auto track (also in
+  // array order). The first candidate whose `baseUrl` parses
+  // produces the result; a malformed URL on the highest-priority
+  // candidate must not suppress a working candidate further down.
+  const humans: CaptionTrack[] = [];
+  const autos: CaptionTrack[] = [];
+  for (const t of tracks) {
     if (!t.isTranslatable) continue;
-    if (t.kind === "asr") {
-      if (autoIndex === -1) autoIndex = i;
-    } else {
-      if (humanIndex === -1) humanIndex = i;
+    if (t.kind === "asr") autos.push(t);
+    else humans.push(t);
+  }
+  for (const candidate of [...humans, ...autos]) {
+    // YouTube delivers absolute https://… URLs, but
+    // `extractPlayerData` only verifies `baseUrl` is a string. If the
+    // value is malformed (site change, unexpected input) `new URL`
+    // throws; skip this candidate and try the next one.
+    let url: URL;
+    try {
+      url = new URL(candidate.baseUrl);
+    } catch {
+      continue;
     }
+    url.searchParams.set("tlang", preferredLanguage);
+    return {
+      baseUrl: url.toString(),
+      languageCode: preferredLanguage,
+      source: "translation",
+    };
   }
-  const chosenIndex = humanIndex !== -1 ? humanIndex : autoIndex;
-  if (chosenIndex === -1) return null;
-  const source = tracks[chosenIndex]!;
-
-  // YouTube delivers absolute https://… URLs, but `extractPlayerData`
-  // only verifies that `baseUrl` is a string. If the value is malformed
-  // (site change, unexpected input) `new URL` would throw and crash
-  // selection. Skip translation derivation for this track in that case
-  // — the outer loop falls through to the next preferred language.
-  let url: URL;
-  try {
-    url = new URL(source.baseUrl);
-  } catch {
-    return null;
-  }
-  url.searchParams.set("tlang", preferredLanguage);
-
-  return {
-    baseUrl: url.toString(),
-    languageCode: preferredLanguage,
-    source: "translation",
-  };
+  return null;
 }

@@ -111,6 +111,34 @@ describe("selectTrack (SPEC §6.1.2 + §6.1.3)", () => {
     expect(url.searchParams.get("lang")).toBe("en");
   });
 
+  it("skips a translatable track whose baseUrl is malformed and uses the next candidate", () => {
+    const tracks = [
+      track({ baseUrl: "not a url", languageCode: "en", isTranslatable: true }),
+      track({ baseUrl: "https://fr-fallback", languageCode: "fr", isTranslatable: true }),
+    ];
+    const result = selectTrack(tracks, ["ja"]);
+    expect(result?.source).toBe("translation");
+    const url = new URL(result!.baseUrl);
+    expect(url.origin + url.pathname).toBe("https://fr-fallback/");
+    expect(url.searchParams.get("tlang")).toBe("ja");
+  });
+
+  it("falls through to the next priority when every translatable track in this priority has a malformed baseUrl", () => {
+    const tracks = [
+      track({ baseUrl: "not a url", languageCode: "en", isTranslatable: true }),
+      track({ baseUrl: "https://ja", languageCode: "ja", isTranslatable: false }),
+    ];
+    // For "fr": no direct match, only one translatable track and its
+    // baseUrl is malformed → translation fails → outer loop continues.
+    // For "ja": direct match wins.
+    const result = selectTrack(tracks, ["fr", "ja"]);
+    expect(result).toEqual({
+      baseUrl: "https://ja",
+      languageCode: "ja",
+      source: "human",
+    });
+  });
+
   it("commits to a translation under the first priority instead of falling through to a later direct match", () => {
     const tracks = [
       track({ baseUrl: "https://en", languageCode: "en", isTranslatable: true }),
