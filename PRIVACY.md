@@ -42,7 +42,7 @@ The keys are accessible to the Subflow extension code (and to anyone with physic
 The manifest declares exactly:
 
 - `storage` — needed to read and write workflow / language settings to `chrome.storage.local`.
-- `scripting` — needed to inject the content script and main-world helper into YouTube watch pages.
+- `scripting` — declared per SPEC §7.5 as a reserved permission for future dynamic script-injection paths (e.g. `chrome.scripting.executeScript`). The current implementation does not actually invoke any `chrome.scripting.*` API; static `content_scripts` declarations in `manifest.json` handle injection. If a future release ships without exercising this permission, it should be removed from the manifest.
 - `host_permissions: ["https://www.youtube.com/*"]` — needed to read subtitles from YouTube and to inject the sidebar.
 
 Subflow explicitly does **not** request `tabs`, `cookies`, `<all_urls>`, `history`, or `downloads`. SPEC §7.5 enumerates this; a test in `tests/manifest.test.ts` verifies the manifest stays this way.
