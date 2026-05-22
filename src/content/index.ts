@@ -53,7 +53,15 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   // forces a deliberate code review.
   if (candidate.type === PLAYER_DATA_TAG) {
     if (!isPlayerDataPayload(data)) return;
-    void chrome.runtime.sendMessage(data);
+    // Forward only the fields the contract declares, in case the
+    // page script attached extra keys. A page-controlled payload
+    // never lands in chrome.runtime.sendMessage unchanged.
+    const d = data as { href: string; result: unknown };
+    void chrome.runtime.sendMessage({
+      type: PLAYER_DATA_TAG,
+      href: d.href,
+      result: d.result,
+    });
     return;
   }
 });

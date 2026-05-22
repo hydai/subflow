@@ -8,6 +8,8 @@
 // Subsequent issues (#5-#7, #15, #16, #18) plug subtitle reading,
 // workflow execution, and error coverage into the same router.
 
+import { PLAYER_DATA_POSTMESSAGE_TAG } from "@/lib/messages";
+
 chrome.action.onClicked.addListener(() => {
   chrome.runtime.openOptionsPage();
 });
@@ -44,7 +46,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (!hasSubflowType(message)) return false;
   if (!isFromYouTubeTab(sender)) return false;
   switch (message.type) {
-    case "subflow:player-data-extracted":
+    case PLAYER_DATA_POSTMESSAGE_TAG:
       // TODO(#5): hand off to the caption-track selector after
       // validating the `result` payload shape. For now, acknowledge so
       // the content script's sendMessage promise resolves cleanly.
