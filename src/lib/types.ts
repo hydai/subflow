@@ -133,14 +133,18 @@ export type SubtitleResult = SubtitleSuccess | SubtitleFailure;
 export interface PromptVariables {
   transcript: string;
   transcript_with_timestamps: string;
-  title: string;
+  // `title`, `channel`, and `duration_seconds` derive from
+  // `videoDetails.{title, author, lengthSeconds}`, all of which the
+  // extractor allows to be undefined per SPEC §7.3
+  // ("videoDetails 中對應欄位缺失時，該變數視為未定義").
+  title: string | undefined;
   video_id: string;
   video_url: string;
-  channel: string;
+  channel: string | undefined;
   // Matched language code (mirrors SelectedTrack.languageCode).
   language: string;
   // Integer seconds; the variable replacement step (#14) stringifies.
-  duration_seconds: number;
+  duration_seconds: number | undefined;
 }
 
 // --------------------------------------------------------------------
