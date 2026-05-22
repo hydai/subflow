@@ -7,6 +7,11 @@
 import { createWriteStream, readFileSync, existsSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+// archiver@8 is ESM-native and exposes per-format classes
+// (`ZipArchive`, `TarArchive`, `JsonArchive`). It no longer exports a
+// callable default factory the way archiver@<=7 did, so the old
+// `import archiver from "archiver"; archiver("zip", ...)` pattern
+// throws at runtime.
 import { ZipArchive } from "archiver";
 
 const here = dirname(fileURLToPath(import.meta.url));
