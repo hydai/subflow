@@ -33,10 +33,8 @@ describe("public/manifest.json (SPEC §7.5)", () => {
   });
 
   it("defines an action with default_title but no default_popup", () => {
-    const action = manifest.action as Record<string, unknown>;
-    expect(action).toBeDefined();
-    expect(action.default_title).toBe("Subflow");
-    expect(action).not.toHaveProperty("default_popup");
+    expect(manifest).toHaveProperty("action.default_title", "Subflow");
+    expect(manifest.action).not.toHaveProperty("default_popup");
   });
 
   it("registers an options_page entry", () => {
@@ -44,11 +42,10 @@ describe("public/manifest.json (SPEC §7.5)", () => {
   });
 
   it("registers a background service worker", () => {
-    const background = manifest.background as Record<string, unknown>;
-    expect(background.service_worker).toBe("background.js");
+    expect(manifest).toHaveProperty("background.service_worker", "background.js");
   });
 
-  it("declares a content script for the YouTube watch domain", () => {
+  it("declares a content script for the entire YouTube domain at document_idle", () => {
     const contentScripts = manifest.content_scripts as Array<Record<string, unknown>>;
     expect(contentScripts).toHaveLength(1);
     const first = contentScripts[0]!;
@@ -58,9 +55,8 @@ describe("public/manifest.json (SPEC §7.5)", () => {
   });
 
   it("ships icons for all four standard sizes", () => {
-    const icons = manifest.icons as Record<string, string>;
     for (const size of ["16", "32", "48", "128"]) {
-      expect(icons[size]).toBe(`icons/icon-${size}.png`);
+      expect(manifest).toHaveProperty(["icons", size], `icons/icon-${size}.png`);
     }
   });
 });
