@@ -41,11 +41,17 @@ const ICON_DIR = resolve(root, "public/icons");
 const BG = "rgb(37, 99, 235)";
 const FG = "#ffffff";
 
-// Stylised "S" defined as an explicit SVG path so the output is
-// byte-identical across operating systems and CI environments — the
+// Stylised "S" defined as an explicit SVG path so the GEOMETRY is
+// reproducible across operating systems and CI environments — the
 // previous text-based version used `font-family="Helvetica, Arial"`
 // which silently substituted whichever similar font was installed,
-// producing different PNGs on different machines.
+// producing visibly different glyphs on different machines.
+//
+// PNG bytes are NOT guaranteed to be identical across runs: different
+// `sharp` / libvips versions can vary chunk metadata (gAMA, pHYs,
+// tEXt) and the zlib-compressed IDAT stream even from the same
+// rendered pixels. The PNGs are committed once and treated as build
+// artifacts; regenerate only when the geometry or color change.
 //
 // The path is hand-drawn in a 100×100 viewBox; the parent <svg>
 // scales it uniformly to whatever pixel size is requested.
