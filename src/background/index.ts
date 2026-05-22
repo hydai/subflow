@@ -117,8 +117,18 @@ function isPlayerDataPayload(value: unknown): value is PlayerDataPayload {
   if (typeof details.videoId !== "string" || details.videoId.length === 0) return false;
   if (typeof details.isLive !== "boolean") return false;
   if (typeof details.isUpcoming !== "boolean") return false;
-  if (details.lengthSeconds !== undefined && typeof details.lengthSeconds !== "number") {
-    return false;
+  if (details.lengthSeconds !== undefined) {
+    // VideoDetails.lengthSeconds is documented as a non-negative
+    // integer or undefined. Reject NaN / Infinity / negative /
+    // non-integer values so parseTimedText's format choice can't be
+    // skewed by a forged number.
+    if (
+      typeof details.lengthSeconds !== "number" ||
+      !Number.isInteger(details.lengthSeconds) ||
+      details.lengthSeconds < 0
+    ) {
+      return false;
+    }
   }
   return true;
 }
