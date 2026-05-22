@@ -107,10 +107,17 @@ function sanitizeCaptionTrack(raw: unknown): CaptionTrack | null {
   if (typeof t.baseUrl !== "string" || typeof t.languageCode !== "string") {
     return null;
   }
+  // SPEC §7.1 lists `isTranslatable` as a required boolean. Reject
+  // tracks where it's missing or wrong-typed rather than silently
+  // defaulting to `false` — a missing flag would otherwise hide a
+  // potentially translatable track from the #5 selector.
+  if (typeof t.isTranslatable !== "boolean") {
+    return null;
+  }
   const track: CaptionTrack = {
     baseUrl: t.baseUrl,
     languageCode: t.languageCode,
-    isTranslatable: t.isTranslatable === true,
+    isTranslatable: t.isTranslatable,
   };
   if (t.kind === "asr") {
     track.kind = "asr";

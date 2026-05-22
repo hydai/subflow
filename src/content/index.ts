@@ -5,17 +5,20 @@
 // `content_scripts` entry in manifest.json does not set `"type":
 // "module"`), so the emitted bundle must contain no ESM module syntax
 // — neither `import` nor `export`. Today this script's only job is to
-// bridge `window.postMessage` traffic from the main-world content
-// script (#4) into chrome.runtime.sendMessage, since the main world
-// has no access to chrome.* APIs.
+// bridge specific `window.postMessage` envelopes from the main-world
+// content script (#4) into chrome.runtime.sendMessage, since the main
+// world has no access to chrome.* APIs.
 //
 // To keep the bundle import-free we deliberately do NOT import shared
 // constants from `@/lib/messages` here: doing so would force Rollup
 // to emit a shared chunk that the classic content script could not
-// load. The forwarder is generic — it relays any postMessage whose
-// `type` starts with the `subflow:` prefix and lets the background
-// service worker do the typed parsing — so this file never needs to
-// know about specific message tags.
+// load. The expected postMessage tags are hardcoded below; the test
+// in `tests/content-bridge.test.ts` keeps them in sync with the
+// canonical constants in `src/lib/messages.ts`. Any page-world script
+// can call `window.postMessage`, so the whitelist keeps the bridge
+// narrow — only known tags get forwarded; everything else is dropped.
+
+const ALLOWED_TAGS: readonly string[] = ["subflow:player-data-extracted"];
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
   if (event.source !== window) return;
@@ -23,6 +26,7 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   const data = event.data;
   if (data === null || typeof data !== "object") return;
   const candidate = data as { type?: unknown };
-  if (typeof candidate.type !== "string" || !candidate.type.startsWith("subflow:")) return;
+  if (typeof candidate.type !== "string") return;
+  if (!ALLOWED_TAGS.includes(candidate.type)) return;
   void chrome.runtime.sendMessage(data);
 });

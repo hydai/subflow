@@ -14,19 +14,24 @@ chrome.action.onClicked.addListener(() => {
   chrome.runtime.openOptionsPage();
 });
 
-function isSubflowMessage(value: unknown): value is Message {
+// Narrow the inbound value just enough to read its discriminator
+// safely. We deliberately do NOT claim the value is a fully-typed
+// Message here — per-variant validation happens at each case in the
+// router below, so adding a new Message variant cannot accidentally
+// inherit a permissive guard.
+function hasSubflowType(value: unknown): value is { type: Message["type"] } {
   if (value === null || typeof value !== "object") return false;
   const candidate = value as { type?: unknown };
   return typeof candidate.type === "string" && candidate.type.startsWith("subflow:");
 }
 
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-  if (!isSubflowMessage(message)) return false;
+  if (!hasSubflowType(message)) return false;
   switch (message.type) {
     case "subflow:player-data-extracted":
-      // TODO(#5): hand off to the caption-track selector. For now,
-      // acknowledge so the content script's sendMessage promise
-      // resolves cleanly.
+      // TODO(#5): hand off to the caption-track selector after
+      // validating the `result` payload shape. For now, acknowledge so
+      // the content script's sendMessage promise resolves cleanly.
       sendResponse({ ack: true });
       return false;
     default:

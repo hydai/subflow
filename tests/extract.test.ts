@@ -128,8 +128,10 @@ describe("extractPlayerData (SPEC §6.1.1, §7.1)", () => {
         playerCaptionsTracklistRenderer: {
           captionTracks: [
             { baseUrl: "https://x", languageCode: "en", isTranslatable: true },
-            { baseUrl: "https://y" }, // missing languageCode
-            { languageCode: "fr" }, // missing baseUrl
+            { baseUrl: "https://y", isTranslatable: true }, // missing languageCode
+            { languageCode: "fr", isTranslatable: true }, // missing baseUrl
+            { baseUrl: "https://q", languageCode: "es" }, // missing isTranslatable
+            { baseUrl: "https://r", languageCode: "de", isTranslatable: "yes" }, // wrong-typed
             { baseUrl: "https://z", languageCode: "ja", isTranslatable: false },
           ],
         },
