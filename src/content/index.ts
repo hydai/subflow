@@ -585,6 +585,14 @@ function renderSubtitleCta(
   switch (result.status) {
     case "missing-language-priority":
       return ctaButton("Open settings", () => {
+        // chrome.runtime.openOptionsPage() can only be called from
+        // a privileged extension context (background / options /
+        // popup), NOT from a content script injected into a page.
+        // Relay the request through the background, which is the
+        // canonical place that pattern is documented in Chrome's
+        // extension docs. See also tests/content-bridge.test.ts —
+        // every subflow:* tag this file emits needs both an
+        // allowlist entry and an explanation at the call site.
         void chrome.runtime.sendMessage({ type: "subflow:open-options-page" });
       });
     case "fetch-failed":
