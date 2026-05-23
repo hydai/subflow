@@ -45,6 +45,14 @@ function hasSubflowType(value: unknown): value is { type: `subflow:${string}` } 
   return typeof candidate.type === "string" && candidate.type.startsWith("subflow:");
 }
 
+// Validator for the "open options page" relay. The message carries
+// no payload beyond the type discriminator, so the gate is just
+// "the envelope has the right type field".
+function isOpenOptionsPagePayload(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  return (value as { type?: unknown }).type === "subflow:open-options-page";
+}
+
 // Sender guard: messages coming through the content-script bridge
 // originate from a YouTube tab. Reject anything posted from other
 // extension contexts (e.g. the options page) or from tabs on other
@@ -335,6 +343,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     case "subflow:refetch-subtitle":
       if (!isRefetchSubtitlePayload(message)) return false;
       subtitles.invalidateVideo(tabId, message.videoId);
+      sendResponse({ ack: true });
+      return false;
+
+    case "subflow:open-options-page":
+      if (!isOpenOptionsPagePayload(message)) return false;
+      // Content scripts can't call chrome.runtime.openOptionsPage()
+      // directly; the API is gated to "extension contexts" (i.e.
+      // not page-injected scripts). Relay through the background
+      // (#17 — "Open settings" CTA on missing-language-priority).
+      chrome.runtime.openOptionsPage();
       sendResponse({ ack: true });
       return false;
 

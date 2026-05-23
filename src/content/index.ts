@@ -537,25 +537,88 @@ function renderSubtitleStatus(state: SidebarUiState): HTMLElement {
   status.className = "subflow-status-text";
   if (state.subtitle === null) {
     status.textContent = "Loading…";
-  } else if (state.subtitle.status === "ok") {
-    status.textContent = `Loaded (${state.subtitle.language})`;
-  } else {
-    status.textContent = subtitleErrorMessage(state.subtitle);
-    status.classList.add("error");
+    section.appendChild(status);
+    return section;
   }
+  if (state.subtitle.status === "ok") {
+    status.textContent = `Loaded (${state.subtitle.language})`;
+    section.appendChild(status);
+    return section;
+  }
+  // SPEC §6.6 — each failure status maps to a specific message and
+  // (where actionable) a CTA. The CTA buttons share the inline
+  // subflow-cta-button class so the user can distinguish them from
+  // the workflow button row.
+  status.classList.add("error");
+  const cta = renderSubtitleCta(state.subtitle, state.videoId);
+  status.textContent = subtitleErrorMessage(state.subtitle);
   section.appendChild(status);
+  if (cta !== null) section.appendChild(cta);
   return section;
 }
 
 function subtitleErrorMessage(result: SubtitleResult): string {
   if (result.status === "ok") return "";
-  // SPEC §6.6 maps each status to a user-facing message. The full
-  // copy lives in #17; this is a placeholder that names the failure
-  // and surfaces the optional diagnostic if one was attached.
-  const detail = "message" in result && result.message !== undefined
-    ? `: ${result.message}`
-    : "";
-  return `Subtitle unavailable (${result.status})${detail}.`;
+  switch (result.status) {
+    case "missing-language-priority":
+      return "Set a language preference in the Subflow options page before this video can be read.";
+    case "no-subtitle":
+      return "No subtitles available for this video.";
+    case "fetch-failed":
+      return "Could not download the subtitle from YouTube.";
+    case "parse-failed":
+      return "Could not parse this YouTube page. Try reloading the tab.";
+    case "live-or-premiere":
+      return "Subflow doesn't support live streams or premieres.";
+  }
+  // Defensive fallback for an unknown status; the type is closed, so
+  // this only fires if a future status is added without updating
+  // the switch above.
+  return "Subtitle unavailable.";
+}
+
+function renderSubtitleCta(
+  result: SubtitleResult,
+  videoId: string,
+): HTMLElement | null {
+  if (result.status === "ok") return null;
+  switch (result.status) {
+    case "missing-language-priority":
+      return ctaButton("Open settings", () => {
+        // chrome.runtime.openOptionsPage() can only be called from
+        // a privileged extension context (background / options /
+        // popup), NOT from a content script injected into a page.
+        // Relay the request through the background, which is the
+        // canonical place that pattern is documented in Chrome's
+        // extension docs. See also tests/content-bridge.test.ts —
+        // every subflow:* tag this file emits needs both an
+        // allowlist entry and an explanation at the call site.
+        void chrome.runtime.sendMessage({ type: "subflow:open-options-page" });
+      });
+    case "fetch-failed":
+      return ctaButton("Retry", () => {
+        void refreshSubtitle(videoId);
+      });
+    case "parse-failed":
+      return ctaButton("Reload page", () => {
+        window.location.reload();
+      });
+    case "no-subtitle":
+    case "live-or-premiere":
+      // No remedial action — the video simply doesn't have data the
+      // user can produce by clicking a button.
+      return null;
+  }
+  return null;
+}
+
+function ctaButton(label: string, onClick: () => void): HTMLElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "subflow-cta-button";
+  b.textContent = label;
+  b.addEventListener("click", onClick);
+  return b;
 }
 
 function renderWorkflowButtons(
@@ -1007,6 +1070,19 @@ const SIDEBAR_CSS = `
   }
   .subflow-status-text.error {
     color: #b91c1c;
+  }
+  .subflow-cta-button {
+    margin-top: 0.4rem;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid #d1d5db;
+    border-radius: 0.25rem;
+    padding: 0.3rem 0.6rem;
+    cursor: pointer;
+  }
+  .subflow-cta-button:hover {
+    background: rgba(127, 127, 127, 0.08);
   }
   .subflow-button-row {
     display: flex;
