@@ -85,10 +85,12 @@ function enqueueInFlightOp(
     const next = fn(current);
     if (next !== current) await writeInFlight(next);
   });
-  inFlightQueue = chained.catch(() => {
-    /* Swallow individual op failures so the queue doesn't deadlock;
-       a downstream replay will still notice abandoned records. */
-  });
+  // Keep the queue alive even if a single op rejects (e.g. quota
+  // exceeded). The chained promise itself still surfaces the
+  // rejection to the caller so they can choose what to do; the
+  // queue-internal handle just swallows it so the next op can
+  // still be scheduled.
+  inFlightQueue = chained.catch(() => undefined);
   return chained;
 }
 
@@ -129,17 +131,22 @@ async function readInFlight(): Promise<Record<string, InFlightRecord>> {
 async function writeInFlight(
   records: Record<string, InFlightRecord>,
 ): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     try {
       chrome.storage.local.set({ [IN_FLIGHT_STORAGE_KEY]: records }, () => {
-        // Same as readInFlight: surface lastError-shaped failures
-        // by simply resolving (the queue keeps moving; the next
-        // replay will catch any abandoned records).
-        void chrome.runtime.lastError;
+        // Storage failures (quota exceeded, extension reload mid-
+        // write) come back via chrome.runtime.lastError. Reject so
+        // the caller can decide how to surface the failure rather
+        // than silently pretending the scratchpad updated.
+        const last = chrome.runtime.lastError;
+        if (last !== undefined && last !== null) {
+          reject(new Error(last.message ?? "chrome.storage.local.set failed"));
+          return;
+        }
         resolve();
       });
-    } catch {
-      resolve();
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
     }
   });
 }
@@ -598,12 +605,22 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           workflowName: message.workflow.name,
           startedAt: Date.now(),
         };
-        // Record write must land BEFORE dispatching so a worker
-        // terminated mid-fetch always leaves a recoverable trail.
-        // Chain dispatch off the record-landing promise via .then
-        // rather than awaiting (the router callback is sync — we
-        // return true below to keep the message channel open).
-        const recordingPromise = recordInFlight(inFlightRecord);
+        // Record write SHOULD land before dispatching so a worker
+        // terminated mid-fetch leaves a recoverable trail. Chain
+        // dispatch off the record-landing promise via .then (the
+        // router callback is sync; return true below keeps the
+        // message channel open).
+        //
+        // Best-effort, not guaranteed: if chrome.storage.local
+        // itself fails (quota exceeded, extension reload mid-
+        // write), recordInFlight rejects. We catch that and
+        // proceed to dispatch anyway, since refusing to run the
+        // workflow because of a storage failure would be worse
+        // for the user than losing the interruption-detection
+        // safety net for this one request.
+        const recordingPromise = recordInFlight(inFlightRecord).catch(() => {
+          /* swallow — see comment above */
+        });
         recordingPromise
           .then(() => {
             return message.trigger === "auto"
@@ -621,18 +638,19 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             // Still send a response so the sender's promise settles,
             // but mark it suppressed so the sidebar doesn't add an
             // entry to the result list.
-            // Clear the in-flight record BEFORE sendResponse so
-            // that if the service worker is terminated immediately
-            // after this microtask, the next worker generation
-            // doesn't replay this resolved request as
-            // "interrupted". The recordingPromise.then() chain
-            // guarantees the record write landed before the
-            // clear, and the await keeps the worker alive (and
-            // the sendResponse channel open) until the clear has
-            // hit storage.
-            await recordingPromise.then(() =>
-              clearInFlight(message.requestId),
-            );
+            // Try to clear the in-flight record BEFORE
+            // sendResponse so a worker termination immediately
+            // after this microtask doesn't replay this resolved
+            // request as "interrupted" on next wake.
+            // Best-effort — if the clear itself errors (rare; same
+            // failure modes as recordInFlight), we still need to
+            // return a result to the sidebar, so swallow and
+            // continue. The next replay will produce one stale
+            // "interrupted" entry, which the user can dismiss via
+            // Retry.
+            await recordingPromise
+              .then(() => clearInFlight(message.requestId))
+              .catch(() => undefined);
             if (result === null) {
               // Dedup hit — no actual request was issued.
               sendResponse({
@@ -653,9 +671,9 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             });
           })
           .catch(async (err: unknown) => {
-            await recordingPromise.then(() =>
-              clearInFlight(message.requestId),
-            );
+            await recordingPromise
+              .then(() => clearInFlight(message.requestId))
+              .catch(() => undefined);
             sendResponse({
               videoId: message.videoId,
               requestId: message.requestId,
