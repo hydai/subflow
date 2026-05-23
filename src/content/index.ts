@@ -208,6 +208,18 @@ interface SidebarUiState {
 }
 
 let sidebarState: SidebarUiState | null = null;
+// Cached across SPA navigations within the same tab. SPEC §6.8: a
+// settings change in the options page only takes effect on the NEXT
+// watch page load — not on every videoId switch. Loading
+// chrome.storage.local each SPA navigation would (a) bombard the
+// storage API and (b) make the SPEC promise harder to reason about
+// (the user might see workflows shift mid-session). Cleared on tab
+// close along with the rest of the module state.
+let cachedWorkflows: Workflow[] | null = null;
+// Set to true when chrome.storage.local couldn't be read, so the UI
+// can show a distinct "cannot read workflow settings" state instead
+// of pretending the user has no workflows configured (SPEC §6.6).
+let workflowsLoadFailed = false;
 // Bumped on every renderSidebar call. Captured by the async
 // initializer so a late-arriving setup for an old video can't
 // overwrite the sidebarState that a newer SPA navigation already
@@ -313,20 +325,29 @@ async function requestSubtitle(
 }
 
 async function loadWorkflows(): Promise<Workflow[]> {
-  // Inline rather than depending on @/lib/storage so the classic
-  // script doesn't share a runtime import with background. SPEC
-  // §6.4 lets us load once at mount and not subscribe to changes.
+  // Cached across SPA navigations per SPEC §6.8 — workflows are
+  // read ONCE per watch-page session and not subscribed to. A user
+  // editing in the options page sees their changes on the next
+  // /watch URL load. Read errors are also remembered (in
+  // workflowsLoadFailed) so the sidebar can distinguish "couldn't
+  // read settings" from "no manual workflows configured".
+  if (cachedWorkflows !== null) return cachedWorkflows;
   return new Promise((resolve) => {
     try {
       chrome.storage.local.get(["workflows"], (items) => {
         const last = chrome.runtime.lastError;
         if (last !== undefined && last !== null) {
+          workflowsLoadFailed = true;
           resolve([]);
           return;
         }
         const raw = items?.workflows;
         if (!Array.isArray(raw)) {
-          resolve([]);
+          // No `workflows` key at all is fine — empty list. We only
+          // raise the failure flag when the storage API itself
+          // failed (above).
+          cachedWorkflows = [];
+          resolve(cachedWorkflows);
           return;
         }
         // Sanitize each entry — storage could contain malformed data
@@ -335,21 +356,28 @@ async function loadWorkflows(): Promise<Workflow[]> {
         // renderWorkflowButtons can't crash on \`w.autoRun\` of a
         // non-object.
         const sanitized = (raw as unknown[]).filter(isWorkflowShape);
+        cachedWorkflows = sanitized;
         resolve(sanitized);
       });
     } catch {
+      workflowsLoadFailed = true;
       resolve([]);
     }
   });
 }
 
+// Matches the background's isWorkflow validator so the sidebar
+// can't render a button for a workflow that the background would
+// reject. Symmetric across the wire: same fields, same constraints.
 function isWorkflowShape(value: unknown): value is Workflow {
   if (value === null || typeof value !== "object") return false;
   const w = value as Record<string, unknown>;
   if (typeof w.id !== "string" || w.id.length === 0) return false;
-  if (typeof w.name !== "string") return false;
-  if (typeof w.url !== "string") return false;
-  if (typeof w.promptTemplate !== "string") return false;
+  if (typeof w.name !== "string" || w.name.length === 0) return false;
+  if (typeof w.url !== "string" || !w.url.startsWith("https://")) return false;
+  if (typeof w.promptTemplate !== "string" || w.promptTemplate.length === 0) {
+    return false;
+  }
   if (typeof w.autoRun !== "boolean") return false;
   if (
     w.headers === null ||
@@ -357,6 +385,11 @@ function isWorkflowShape(value: unknown): value is Workflow {
     Array.isArray(w.headers)
   ) {
     return false;
+  }
+  const headers = w.headers as Record<string, unknown>;
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value !== "string") return false;
+    if (key.toLowerCase() === "content-type") return false;
   }
   return true;
 }
@@ -424,6 +457,15 @@ function renderWorkflowButtons(
   heading.textContent = "Workflows";
   section.appendChild(heading);
 
+  if (workflowsLoadFailed) {
+    const err = document.createElement("p");
+    err.className = "subflow-empty";
+    err.textContent =
+      "Could not read workflow settings. Open the Subflow options page to verify and retry.";
+    section.appendChild(err);
+    return section;
+  }
+
   // Only manual workflows appear in the button list (SPEC §6.4).
   // autoRun workflows fire automatically and surface results in
   // the result list without a button.
@@ -437,6 +479,14 @@ function renderWorkflowButtons(
     return section;
   }
 
+  // SPEC §6.6: subtitle precondition states disable workflow
+  // buttons. Disable when:
+  //   - subtitle not yet loaded (null → "Loading…")
+  //   - subtitle resolved to any failure status (no transcript to
+  //     send, so a workflow request would be precondition-failed)
+  const subtitleReady =
+    state.subtitle !== null && state.subtitle.status === "ok";
+
   const row = document.createElement("div");
   row.className = "subflow-button-row";
   for (const workflow of manualWorkflows) {
@@ -444,6 +494,10 @@ function renderWorkflowButtons(
     button.type = "button";
     button.className = "subflow-workflow-button";
     button.textContent = workflow.name;
+    button.disabled = !subtitleReady;
+    if (!subtitleReady) {
+      button.title = "Waiting for subtitle to load.";
+    }
     button.addEventListener("click", () => {
       void triggerWorkflow(workflow, shadow);
     });
