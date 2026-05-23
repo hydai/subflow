@@ -211,6 +211,16 @@ interface SidebarUiState {
   subtitle: SubtitleResult | null;
   // Newest first, capped at 5 (SPEC §6.4 result list).
   results: WorkflowResult[];
+  // Request IDs we've already rendered a result for. Used to
+  // dedupe a service-worker-termination scenario: triggerWorkflow's
+  // catch handler can synthesise a local network-error if
+  // sendMessage rejects, AND the background's
+  // replayInterruptedWorkflows can later push an "interrupted"
+  // result for the SAME requestId. Without dedup, the sidebar
+  // would show both. We keep the first one that landed (whichever
+  // got to handleWorkflowResponse first) and drop subsequent
+  // duplicates.
+  seenRequestIds: Set<string>;
   // videoId scope for the current sidebar instance. Reset on every
   // SPA navigation.
   videoId: string;
@@ -270,6 +280,7 @@ async function renderSidebar(
     workflows: [],
     subtitle: null,
     results: [],
+    seenRequestIds: new Set(),
     videoId,
   };
   paintSidebar(shadow, sidebarState);
@@ -288,6 +299,7 @@ async function renderSidebar(
       workflows,
       subtitle: null,
       results: [],
+      seenRequestIds: new Set(),
       videoId,
     };
   }
@@ -737,9 +749,10 @@ function renderResultEntry(result: WorkflowResult): HTMLElement {
 
   // SPEC §6.6 #18: Retry button appears for outcomes the user can
   // reasonably want to retry — 5xx, timeout, network-error,
-  // precondition-failed, and the synthetic "background interrupted"
-  // result (also a network-error). NOT 4xx (user-config error)
-  // and NOT aborted (suppressed by the response handler anyway).
+  // precondition-failed, and "interrupted" (dedicated outcome
+  // produced by replayInterruptedWorkflows on service-worker
+  // wake). NOT 4xx (user-config error) and NOT aborted (suppressed
+  // by the response handler anyway).
   if (shouldOfferRetry(result)) {
     item.appendChild(
       ctaButton("Retry", () => {
@@ -1039,6 +1052,11 @@ function handleWorkflowResponse(
   if (response.videoId !== sidebarState.videoId) return;
   if (response.suppressed === true) return;
   if (response.result === null) return;
+  // Dedup by requestId so a single logical request (e.g. one that
+  // a service-worker termination produced two responses for —
+  // local synthetic + replay) lands at most once in the list.
+  if (sidebarState.seenRequestIds.has(response.requestId)) return;
+  sidebarState.seenRequestIds.add(response.requestId);
   sidebarState.results = addResult(sidebarState.results, response.result);
   paintSidebar(shadow, sidebarState);
 }
@@ -1201,7 +1219,9 @@ const SIDEBAR_CSS = `
   }
   .subflow-result.outcome-http-error,
   .subflow-result.outcome-network-error,
-  .subflow-result.outcome-timeout {
+  .subflow-result.outcome-timeout,
+  .subflow-result.outcome-precondition-failed,
+  .subflow-result.outcome-interrupted {
     border-color: #fca5a5;
     background: rgba(248, 113, 113, 0.08);
   }

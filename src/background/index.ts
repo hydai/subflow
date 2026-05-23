@@ -32,10 +32,10 @@ const orchestrator = new WorkflowOrchestrator();
 //      resolves (success OR failure), the entry is removed.
 //   2. On service-worker startup, we read that key. Any residual
 //      entries belonged to a previous worker that was terminated
-//      mid-flight; we synthesise a network-error result with an
-//      "interrupted" body and push it to the originating tab so
-//      the sidebar can render the failure + a Retry button. Then
-//      we clear the storage entry.
+//      mid-flight; we synthesise an outcome:"interrupted" result
+//      and push it to the originating tab so the sidebar can
+//      render the failure + a Retry button. Then we clear the
+//      storage entry.
 //
 // We use chrome.storage.local rather than session storage because
 // the worker termination wipes any in-memory state, and we want
