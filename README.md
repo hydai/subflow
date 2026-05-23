@@ -1,10 +1,10 @@
 # Subflow
 
-Subflow is a Chrome extension (in active development) that turns YouTube video subtitles into input for your own AI workflows. The design has no Subflow-controlled backend: subtitles are read on-device, and workflow requests go directly from your browser to whatever HTTPS endpoint you configure.
+Subflow is a Chrome extension that turns YouTube video subtitles into input for your own AI workflows. The design has no Subflow-controlled backend: subtitles are read on-device, and workflow requests go directly from your browser to whatever HTTPS endpoint you configure.
 
-> **Status**: under construction. Internal pipeline (subtitle extraction → caption-track selection → XML parsing → cache → prompt substitution → HTTP POST runner → SPA sidebar lifecycle) is implemented and unit-tested; the visible options page and sidebar UI are still landing (tracked in [#9](https://github.com/hydai/subflow/issues/9), [#10](https://github.com/hydai/subflow/issues/10), [#12](https://github.com/hydai/subflow/issues/12), [#13](https://github.com/hydai/subflow/issues/13), [#16](https://github.com/hydai/subflow/issues/16)–[#18](https://github.com/hydai/subflow/issues/18)). This README describes the design and how the extension will behave end-to-end once those issues merge.
+> **Status**: `v0.1.0` candidate. The end-to-end pipeline — subtitle extraction, caption-track selection, XML parsing, in-memory cache, prompt substitution, HTTP POST runner with timeout / error coverage / service-worker termination replay, manual + auto-run trigger semantics, SPA-driven sidebar lifecycle, options page with workflow CRUD and language priority editor, and Web Store packaging — is implemented and unit-tested. A Chrome Web Store listing has not yet been published; until it is, install via the developer-build steps below. See [`CHANGELOG.md`](./CHANGELOG.md) for the release notes.
 
-## What Subflow will do (per [`SPEC.md`](./SPEC.md))
+## What Subflow does (per [`SPEC.md`](./SPEC.md))
 
 - Detect when you're on a `youtube.com/watch?v=…` page and read the video's subtitles directly from the player data — no audio download, no ASR, no third-party transcript service.
 - Let you register HTTP POST endpoints ("workflows") with prompt templates that consume `{{transcript}}`, `{{title}}`, `{{video_id}}`, and the other variables in [Prompt template variables](#prompt-template-variables) below.
@@ -42,11 +42,11 @@ Subflow is a Chrome extension (in active development) that turns YouTube video s
 
 3. Open Chrome → `chrome://extensions/`, enable "Developer mode", click "Load unpacked", and select the `dist/` directory the build just produced.
 
-4. Pin the Subflow icon in the toolbar so the options page is one click away (once the options page UI lands in [#9](https://github.com/hydai/subflow/issues/9)).
+4. Pin the Subflow icon in the toolbar so the options page is one click away.
 
-The Chrome Web Store listing is tracked in [#20](https://github.com/hydai/subflow/issues/20); the bundling already produces a Web-Store-ready zip via `npm run package`.
+A Chrome Web Store listing has not yet been published; `npm run package` already produces an upload-ready `subflow-v<version>.zip` (typecheck → test → build → zip, with a manifest/`package.json` version-consistency check).
 
-## How using Subflow will work (post-#9, #10, #12)
+## How using Subflow works
 
 1. Click the Subflow toolbar icon to open the options page.
 2. Set your language preference (e.g. `zh-TW, en`) — these are BCP-47 codes in priority order.
