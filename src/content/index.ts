@@ -259,7 +259,14 @@ async function requestSubtitle(
     if (prefs !== null && typeof prefs === "object") {
       const langs = (prefs as { languagePriority?: unknown }).languagePriority;
       if (Array.isArray(langs)) {
-        languagePriority = langs.filter((s) => typeof s === "string") as string[];
+        // Trim and drop blanks so the background validator
+        // (isRequestSubtitlePayload, which rejects whitespace /
+        // empty entries) doesn't silently refuse the message when
+        // storage held minor garbage like a trailing newline.
+        languagePriority = (langs as unknown[])
+          .filter((s): s is string => typeof s === "string")
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0);
       }
     }
   } catch {
