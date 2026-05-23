@@ -512,19 +512,40 @@ async function triggerWorkflow(
     startedAt: Date.now(),
   });
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = (await chrome.runtime.sendMessage({
       type: "subflow:execute-workflow",
       workflow,
       // The background owns the prompt-variable substitution. Sending
       // a placeholder variables block lets the background validate
       // the message envelope; the actual variables are filled in
-      // by the background from its own SubtitleService state. (#15
-      // / #16 — the message validator accepts this shape today.)
+      // by the background from its own SubtitleService state.
       variables: makePlaceholderVariables(sidebarState.videoId),
       trigger: "manual",
       videoId: sidebarState.videoId,
       requestId,
-    });
+    })) as unknown;
+    // Guard against background unreachable (service worker reload
+    // mid-call): sendMessage resolves to undefined, which would
+    // make handleWorkflowResponse crash on .videoId access.
+    if (!isWorkflowResponse(response)) {
+      handleWorkflowResponse(
+        {
+          videoId: sidebarState.videoId,
+          requestId,
+          result: {
+            workflowId: workflow.id,
+            workflowName: workflow.name,
+            outcome: "network-error",
+            body:
+              "Background did not respond. Reload the extension at chrome://extensions/ and try again.",
+            timestamp: Date.now(),
+          },
+          suppressed: false,
+        },
+        shadow,
+      );
+      return;
+    }
     handleWorkflowResponse(response, shadow);
   } catch (err) {
     handleWorkflowResponse(
@@ -573,6 +594,16 @@ interface WorkflowResponse {
   suppressed?: boolean;
 }
 
+function isWorkflowResponse(value: unknown): value is WorkflowResponse {
+  if (value === null || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.videoId === "string" &&
+    typeof v.requestId === "string" &&
+    (v.result === null || (typeof v.result === "object" && v.result !== null))
+  );
+}
+
 function handleWorkflowResponse(
   response: WorkflowResponse,
   shadow: ShadowRoot,
@@ -599,7 +630,9 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
     sidebarState.subtitle = m.result as SubtitleResult;
     paintSidebar(sidebarShadow, sidebarState);
   } else if (msg.type === "subflow:workflow-result") {
-    handleWorkflowResponse(message as WorkflowResponse, sidebarShadow);
+    if (isWorkflowResponse(message)) {
+      handleWorkflowResponse(message, sidebarShadow);
+    }
   }
   return undefined;
 });

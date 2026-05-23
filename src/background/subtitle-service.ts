@@ -185,7 +185,15 @@ export class SubtitleService {
 
     const cacheKey = makeKey(videoId, selected.languageCode);
     const cached = state.subtitleCache.get(cacheKey);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      // Even on a cache hit, remember the language we just served
+      // so buildPromptVariables matches the user's current
+      // languagePriority choice. Otherwise a user who changed
+      // priority would get prompt variables from the previous
+      // language as long as that cache entry still exists.
+      state.recentCacheKey.set(videoId, cacheKey);
+      return cached;
+    }
 
     const inFlight = state.inFlight.get(cacheKey);
     if (inFlight !== undefined) return inFlight;
