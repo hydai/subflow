@@ -77,7 +77,7 @@ jobs:
             index($0, prefix) == 1 { found = 1; exit }
             END { exit !found }
           ' CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section. Update the heading from '## [Unreleased]' to '## [${VERSION}] - YYYY-MM-DD' before tagging."
+            echo "::error::CHANGELOG.md has no heading starting with '## [${VERSION}]'. The check only requires that prefix; what follows on the line (date, separator style) is cosmetic. Example accepted forms: '## [${VERSION}]', '## [${VERSION}] - YYYY-MM-DD', '## [${VERSION}] — YYYY-MM-DD'. See RELEASE.md for the pre-release checklist."
             exit 1
           fi
 
