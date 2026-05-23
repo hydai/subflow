@@ -232,6 +232,12 @@ let workflowsLoadFailed = false;
 // (which reloads with the page) rather than chrome.storage.local.
 // Default false → sidebar starts expanded.
 let sidebarCollapsed = false;
+// Captured scrollTop of the expanded root, set when the user
+// collapses. The next expand restores from this value so toggling
+// doesn't reset the user's scroll position (CSS overflow: hidden
+// + display: none on the inner sections would otherwise clamp
+// scrollTop to 0 while collapsed).
+let savedScrollBeforeCollapse: number | null = null;
 // Bumped on every renderSidebar call. Captured by the async
 // initializer so a late-arriving setup for an old video can't
 // overwrite the sidebarState that a newer SPA navigation already
@@ -458,8 +464,15 @@ function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
     // change with collapsed state, only CSS visibility), so the
     // cheaper move is to flip the class on the root and update the
     // toggle's own attributes. This preserves keyboard focus on the
-    // toggle (which the user just clicked) and any scroll position
-    // inside the sections.
+    // toggle (which the user just clicked).
+    //
+    // Capture the scroll position BEFORE collapsing so re-expanding
+    // lands the user back where they were. Without this, collapsing
+    // sets `overflow: hidden` + `display: none` on the sections,
+    // which causes the browser to clamp scrollTop to 0 — the
+    // captured value lets us restore it after re-expanding.
+    const wasCollapsed = sidebarCollapsed;
+    const savedScrollTop = wasCollapsed ? null : root.scrollTop;
     sidebarCollapsed = !sidebarCollapsed;
     root.classList.toggle("collapsed", sidebarCollapsed);
     toggle.setAttribute(
@@ -468,6 +481,26 @@ function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
     );
     toggle.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
     toggle.textContent = sidebarCollapsed ? "‹" : "›";
+    if (!sidebarCollapsed) {
+      // Re-expanding: restore the saved scrollTop on the NEXT frame
+      // so layout finishes settling. The capture above stored the
+      // pre-collapse value the previous time the user collapsed;
+      // we recover it via a module-scoped variable so consecutive
+      // toggle clicks (collapse → expand → collapse → expand) all
+      // round-trip.
+      const target = savedScrollBeforeCollapse;
+      if (target !== null) {
+        requestAnimationFrame(() => {
+          root.scrollTop = target;
+        });
+      }
+    } else if (savedScrollTop !== null) {
+      // Collapsing: stash the position so the next expand can
+      // restore. Cleared on full repaints (paintSidebar) since the
+      // root element is replaced — that's intentional, the user
+      // gets a fresh top-of-list view on the next mount.
+      savedScrollBeforeCollapse = savedScrollTop;
+    }
   });
   header.appendChild(toggle);
   root.appendChild(header);
