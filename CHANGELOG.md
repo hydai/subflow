@@ -58,12 +58,17 @@ First release. The full SPEC.md scope (issues #1–#20) is implemented. The core
 - Screenshots of the options page and sidebar are not yet captured; the `docs/screenshots/` directory holds a placeholder describing what should live there.
 - No Chrome Web Store listing yet; the upload-ready zip is produced by `npm run package` but has not been submitted.
 
-[0.1.0]: https://github.com/hydai/subflow/releases/tag/v0.1.0
 <!--
-The `v0.1.0` git tag has not yet been pushed. After this CHANGELOG
-lands on main, run `git tag v0.1.0` and `git push origin v0.1.0`
-(and optionally publish a GitHub Release) so the link above
-resolves. When work on the next version begins, add a new
+The `v0.1.0` git tag has not yet been pushed, so the `[0.1.0]`
+heading above renders as plain text rather than as a link to a
+release page. After this CHANGELOG lands on `main`, run
+`git tag v0.1.0 && git push origin v0.1.0` (and optionally
+publish a GitHub Release), then add the reference-link line:
+
+    [0.1.0]: https://github.com/hydai/subflow/releases/tag/v0.1.0
+
+When work on the next version begins, add a new
 `## [Unreleased]` section above and a matching
-`[Unreleased]: .../compare/v0.1.0...HEAD` line below.
+`[Unreleased]: https://github.com/hydai/subflow/compare/v0.1.0...HEAD`
+line below.
 -->
