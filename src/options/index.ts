@@ -270,7 +270,11 @@ function renderLanguageSection(): HTMLElement {
       id: inputId,
       value: lang,
       "aria-label": `Language ${idx + 1}`,
-      placeholder: "e.g. zh-TW",
+      // Issue #10 hints the placeholder should suggest multiple
+      // codes so users discover ordered-list semantics. Each input
+      // holds ONE code, so show "zh-TW, en" as a hint that the
+      // surrounding list is the multi-code container.
+      placeholder: "e.g. zh-TW, en",
     }) as HTMLInputElement;
     input.addEventListener("input", () => {
       state.languagePriority[idx] = input.value;
@@ -369,7 +373,20 @@ function renderLanguageSection(): HTMLElement {
   const addRow = el("div", { class: "header-row" });
   const addBtn = button("Add language", () => addLang());
   addRow.appendChild(addBtn);
-  const saveBtn = button("Save languages", saveLanguages, "primary");
+  // Per issue #10's implementation note, the Save button is
+  // disabled when the list trims to no non-empty codes. The
+  // validator would reject the save anyway, but disabling the
+  // button surfaces the precondition before the user clicks.
+  const hasAnyNonBlank = state.languagePriority.some(
+    (s) => s.trim().length > 0,
+  );
+  const saveBtn = labelledButton(
+    "Save languages",
+    "Save languages",
+    saveLanguages,
+    "primary",
+  );
+  if (!hasAnyNonBlank) (saveBtn as HTMLButtonElement).disabled = true;
   addRow.appendChild(saveBtn);
   section.append(list, addRow);
   return section;
