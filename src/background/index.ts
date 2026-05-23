@@ -149,6 +149,25 @@ async function writeInFlight(
 // emit a result — synthesise an "interrupted" result and push it to
 // the originating tab.
 void replayInterruptedWorkflows();
+
+// Per-field shape check so a corrupted / hand-edited scratchpad
+// can't drive replay with garbage. The replay loop only handles
+// records that pass this guard; anything else is silently dropped
+// (the user wouldn't have meaningful action on a malformed
+// residue anyway).
+function isInFlightRecord(value: unknown): value is InFlightRecord {
+  if (value === null || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  return (
+    typeof r.tabId === "number" &&
+    typeof r.videoId === "string" &&
+    typeof r.requestId === "string" &&
+    typeof r.workflowId === "string" &&
+    typeof r.workflowName === "string" &&
+    typeof r.startedAt === "number"
+  );
+}
+
 async function replayInterruptedWorkflows(): Promise<void> {
   // Route the snapshot+clear through the serialised queue so we
   // can't race a concurrent execute-workflow dispatch. The queued
@@ -160,7 +179,7 @@ async function replayInterruptedWorkflows(): Promise<void> {
   // belonged to a worker generation that didn't complete).
   let entries: InFlightRecord[] = [];
   await enqueueInFlightOp((current) => {
-    entries = Object.values(current);
+    entries = Object.values(current).filter(isInFlightRecord);
     return {};
   });
   if (entries.length === 0) return;
