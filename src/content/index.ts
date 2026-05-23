@@ -221,6 +221,12 @@ interface SidebarUiState {
   // got to handleWorkflowResponse first) and drop subsequent
   // duplicates.
   seenRequestIds: Set<string>;
+  // Pointer from requestId → index in `results`. Lets the dedup
+  // "upgrade" path (network-error → interrupted) target the right
+  // row even when the same workflow has been retried and there
+  // are multiple matching outcomes. The Map is kept consistent
+  // with `results` by addResult's caller below.
+  resultIndexByRequestId: Map<string, number>;
   // videoId scope for the current sidebar instance. Reset on every
   // SPA navigation.
   videoId: string;
@@ -281,6 +287,7 @@ async function renderSidebar(
     subtitle: null,
     results: [],
     seenRequestIds: new Set(),
+    resultIndexByRequestId: new Map(),
     videoId,
   };
   paintSidebar(shadow, sidebarState);
@@ -300,6 +307,7 @@ async function renderSidebar(
       subtitle: null,
       results: [],
       seenRequestIds: new Set(),
+      resultIndexByRequestId: new Map(),
       videoId,
     };
   }
@@ -802,13 +810,12 @@ function shouldOfferRetry(result: WorkflowResult): boolean {
 
 async function retryWorkflow(workflowId: string): Promise<void> {
   if (sidebarState === null || sidebarShadow === null) return;
-  // Mirror the workflow-button gating: if subtitles aren't ready,
-  // a retry would just queue up another precondition-failed result.
-  // The button is still visually clickable (it's a CTA-styled
-  // <button> without a disabled prop), so the no-op gate lives
-  // here. Without this, clicking Retry on an old failure while
-  // the subtitle is reloading would spam the result list with
-  // precondition-failed entries.
+  // Defence-in-depth: the renderResultEntry path also disables the
+  // Retry button when subtitles aren't ready, but the disabled
+  // state reflects the snapshot at the LAST paint. If the user
+  // somehow clicks during a partial repaint or if the gate's ever
+  // bypassed, this no-op stops a retry from queuing up another
+  // precondition-failed.
   if (sidebarState.subtitle === null || sidebarState.subtitle.status !== "ok") {
     return;
   }
@@ -1090,20 +1097,20 @@ function handleWorkflowResponse(
   // "interrupted" replay arrives later, swap the entry in place.
   if (sidebarState.seenRequestIds.has(response.requestId)) {
     if (response.result.outcome === "interrupted") {
-      const existingIdx = sidebarState.results.findIndex(
-        (r, _i) =>
-          // The result type doesn't carry requestId, so identify the
-          // already-rendered entry by workflowId + the same
-          // workflow-level network-error placeholder we want to
-          // replace. This is best-effort; if the user has triggered
-          // the same workflow multiple times, the most recent
-          // matching entry is replaced.
-          r.workflowId === response.result?.workflowId &&
-          r.outcome === "network-error",
-      );
-      if (existingIdx !== -1) {
+      // Track the original-entry index per requestId so we know
+      // EXACTLY which list row to upgrade. Looking it up by
+      // workflowId + outcome would be ambiguous if the same
+      // workflow has been retried and has multiple network-error
+      // entries. resultIndexByRequestId records each requestId's
+      // current position in the results array at the moment it was
+      // first added, and addResult's prepend semantics mean we
+      // need to adjust on every prepend — but the existing entry's
+      // requestId pointer survives any prepend because we update
+      // it when the new entry slots into position 0.
+      const idx = sidebarState.resultIndexByRequestId.get(response.requestId);
+      if (idx !== undefined && sidebarState.results[idx] !== undefined) {
         const next = [...sidebarState.results];
-        next[existingIdx] = response.result;
+        next[idx] = response.result;
         sidebarState.results = next;
         paintSidebar(shadow, sidebarState);
       }
@@ -1119,7 +1126,33 @@ function handleWorkflowResponse(
     sidebarState.seenRequestIds.delete(oldest);
   }
   sidebarState.results = addResult(sidebarState.results, response.result);
+  // addResult prepends + caps at 5. Re-derive the requestId →
+  // index pointer to keep it consistent. We can't track it by
+  // adjusting old indices on prepend because the result type
+  // doesn't carry requestId — but the new entry is always at 0,
+  // and the rest of the indices in the Map shift by +1 (until
+  // they fall off the cap). Simpler to rebuild from a side
+  // table that tracks (requestId → result-shape) at insertion:
+  // since result doesn't carry requestId, we maintain the Map
+  // here by inserting at 0 for the new entry and reconstructing
+  // from existing entries' positions.
+  rebuildResultIndex(sidebarState, response.requestId);
   paintSidebar(shadow, sidebarState);
+}
+
+function rebuildResultIndex(state: SidebarUiState, newRequestId: string): void {
+  // The just-prepended entry is at index 0 with `newRequestId`.
+  // Older entries shift down; entries pushed past the cap are
+  // dropped. We rebuild the Map by walking the previous mapping
+  // and bumping each existing index by 1, then evicting anything
+  // outside the new result-list bounds.
+  const next = new Map<string, number>();
+  next.set(newRequestId, 0);
+  for (const [reqId, oldIdx] of state.resultIndexByRequestId) {
+    const newIdx = oldIdx + 1;
+    if (newIdx < state.results.length) next.set(reqId, newIdx);
+  }
+  state.resultIndexByRequestId = next;
 }
 
 // Listen for unsolicited push messages from the background (e.g.

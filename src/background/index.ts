@@ -50,8 +50,20 @@ interface InFlightRecord {
   requestId: string;
   workflowId: string;
   workflowName: string;
+  // Milliseconds since the unix epoch when the workflow dispatch
+  // landed. Used by replayInterruptedWorkflows to TTL-out very old
+  // residual records (older than IN_FLIGHT_MAX_AGE_MS) — a worker
+  // generation that was killed weeks ago wouldn't produce a
+  // meaningful Retry; better to drop the entry than nag the user
+  // about a long-forgotten attempt.
   startedAt: number;
 }
+
+// Records older than this on service-worker wake-up are dropped
+// rather than replayed. Chosen to be generous (a day) so legitimate
+// quick-fail cases like "user closed laptop overnight" still
+// produce a Retry-able entry the next morning.
+const IN_FLIGHT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 // Serialise the read-modify-write of subflow.inFlightWorkflows
 // through a single Promise chain so concurrent dispatches can't
@@ -178,7 +190,8 @@ function isInFlightRecord(value: unknown): value is InFlightRecord {
   // tabId must be a non-negative integer (chrome.tabs ids are
   // positive ints) and startedAt a finite number — guard against
   // NaN / Infinity / non-int values that pass typeof but blow up
-  // when handed to chrome.tabs.sendMessage / new Date().
+  // when handed to chrome.tabs.sendMessage or when subtracting
+  // Date.now() - startedAt for the TTL check.
   if (
     typeof r.tabId !== "number" ||
     !Number.isInteger(r.tabId) ||
@@ -206,16 +219,21 @@ async function replayInterruptedWorkflows(): Promise<void> {
   // and proceed normally; any dispatches queued BEFORE will be
   // observed here as residual entries (and we replay them — they
   // belonged to a worker generation that didn't complete).
+  const now = Date.now();
   let entries: InFlightRecord[] = [];
   await enqueueInFlightOp((current) => {
-    entries = Object.values(current).filter(isInFlightRecord);
+    entries = Object.values(current)
+      .filter(isInFlightRecord)
+      // TTL: drop records whose workflow started more than
+      // IN_FLIGHT_MAX_AGE_MS ago. The user has long since moved on;
+      // surfacing a Retry button for last week's attempt is
+      // surprising rather than helpful.
+      .filter((r) => now - r.startedAt <= IN_FLIGHT_MAX_AGE_MS);
     // Clear the scratchpad on any non-empty input — both the
     // valid records we're about to drain (so the next wake
     // doesn't replay them) AND any malformed garbage that
     // wouldn't be replayed but would otherwise persist forever.
-    // Skip the write only when the scratchpad is already empty,
-    // saving an unnecessary chrome.storage.local.set on every
-    // clean service-worker start.
+    // Skip the write only when the scratchpad is already empty.
     if (Object.keys(current).length === 0) return current;
     return {};
   });
