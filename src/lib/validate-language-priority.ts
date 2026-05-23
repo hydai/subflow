@@ -41,6 +41,11 @@ export interface LanguagePriorityValidationError {
   message: string;
 }
 
+// SPEC-required copy for the at-least-one rule. Lifted to a
+// module-level constant so the two emit sites — empty-list and
+// all-rows-blank — can't drift if the wording ever changes.
+const AT_LEAST_ONE_MESSAGE = "至少需設定一個語言偏好";
+
 export function validateLanguagePriority(
   codes: readonly string[],
 ): LanguagePriorityValidationResult {
@@ -48,7 +53,7 @@ export function validateLanguagePriority(
   const errors: LanguagePriorityValidationError[] = [];
 
   if (trimmed.length === 0) {
-    errors.push({ message: "至少需設定一個語言偏好" });
+    errors.push({ message: AT_LEAST_ONE_MESSAGE });
     return { trimmed, errors };
   }
 
@@ -73,7 +78,7 @@ export function validateLanguagePriority(
   // (rather than `errors.length === trimmed.length`) so future
   // non-blank rules can be added without invalidating this check.
   if (blankRowCount === trimmed.length) {
-    errors.push({ message: "至少需設定一個語言偏好" });
+    errors.push({ message: AT_LEAST_ONE_MESSAGE });
   }
 
   return { trimmed, errors };

@@ -279,7 +279,14 @@ function renderLanguageSection(): HTMLElement {
     if (rowError !== undefined) {
       const errId = `${inputId}-err`;
       input.setAttribute("aria-invalid", "true");
-      input.setAttribute("aria-describedby", errId);
+      // Merge with any existing aria-describedby (e.g. a future
+      // hint id added here) so screen readers announce both. The
+      // edit-form `field()` helper uses the same merge pattern.
+      const prior = input.getAttribute("aria-describedby");
+      input.setAttribute(
+        "aria-describedby",
+        prior === null ? errId : `${prior} ${errId}`,
+      );
     }
     const total = state.languagePriority.length;
     const up = iconButton(
@@ -330,25 +337,33 @@ function renderLanguageSection(): HTMLElement {
 
 function addLang(): void {
   state.languagePriority.push("");
-  // Stored row errors carry indices from the LAST validation run.
-  // Adding / removing / moving rows shifts subsequent indices, so
-  // the cached errors would highlight the wrong row. Clear them on
-  // any structural edit — the next save attempt re-validates and
-  // produces fresh indices.
-  state.languageRowErrors = [];
+  clearLanguageValidationState();
   render();
 }
 function removeLang(idx: number): void {
   state.languagePriority.splice(idx, 1);
-  state.languageRowErrors = [];
+  clearLanguageValidationState();
   render();
 }
 function moveLang(from: number, to: number): void {
   if (to < 0 || to >= state.languagePriority.length) return;
   const [item] = state.languagePriority.splice(from, 1);
   state.languagePriority.splice(to, 0, item!);
-  state.languageRowErrors = [];
+  clearLanguageValidationState();
   render();
+}
+
+// Stored validation state (row errors AND the section banner) is a
+// snapshot of the LAST save attempt. Any structural edit (add /
+// remove / reorder) shifts subsequent row indices, so the row-anchor
+// would mismatch on the next render. The whole-list banner is a
+// summary of those row errors and the at-least-one rule, so it also
+// stops describing reality once the user starts editing. Clear both
+// together; the next save attempt re-validates and produces a
+// fresh snapshot.
+function clearLanguageValidationState(): void {
+  state.languageRowErrors = [];
+  state.languageError = null;
 }
 async function saveLanguages(): Promise<void> {
   // SPEC §7.4 rules are centralised in validateLanguagePriority.
