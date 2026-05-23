@@ -411,8 +411,13 @@ async function saveLanguages(): Promise<void> {
     (e) => e.index !== undefined,
   );
   const wholeListError = validation.errors.find((e) => e.index === undefined);
+  // Only set state.languageError when the validator emitted a
+  // whole-list error. If only per-row errors are present, each
+  // input already carries an inline message — adding a generic
+  // "Please fix the highlighted rows" banner would be redundant
+  // (and not part of SPEC §7.4's copy).
   if (validation.errors.length > 0) {
-    state.languageError = wholeListError?.message ?? "Please fix the highlighted rows.";
+    state.languageError = wholeListError?.message ?? null;
     render();
     return;
   }
