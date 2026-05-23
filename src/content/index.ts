@@ -780,15 +780,17 @@ function shouldOfferRetry(result: WorkflowResult): boolean {
 
 async function retryWorkflow(workflowId: string): Promise<void> {
   if (sidebarState === null || sidebarShadow === null) return;
-  // Look up the latest definition of this workflow from the
-  // cached list, in case the user edited it between the failure
-  // and the retry. (cachedWorkflows reflects the workflows as of
-  // the current watch-page mount, per SPEC §6.8.)
+  // Look up the workflow from the cached list (read once per
+  // watch-page mount per SPEC §6.8 — no live subscription to
+  // options-page edits, so the lookup matches whatever was
+  // active when this tab loaded). The find can still miss if a
+  // workflow was deleted in the same options-page session AND
+  // somehow shows up here — defence in depth.
   const workflow = sidebarState.workflows.find((w) => w.id === workflowId);
   if (workflow === undefined) {
-    // Workflow was deleted between the failure and the retry —
-    // there's nothing to retry. Silently no-op; the result entry
-    // stays in the list so the user can see they attempted it.
+    // No workflow with that id in the current mount — silently
+    // no-op; the failure result stays in the list as a record
+    // that the attempt was made.
     return;
   }
   await triggerWorkflow(workflow, sidebarShadow);

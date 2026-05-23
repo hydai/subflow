@@ -159,7 +159,13 @@ async function writeInFlight(
 // from a previous worker generation is a request that didn't get to
 // emit a result — synthesise an "interrupted" result and push it to
 // the originating tab.
-void replayInterruptedWorkflows();
+void replayInterruptedWorkflows().catch(() => {
+  // readInFlight can reject (storage failure, unexpected stored
+  // shape). Don't surface the rejection — service-worker startup
+  // shouldn't crash on a corrupted scratchpad. Worst case: a
+  // genuine interrupted request goes unreplayed for this wake;
+  // the user can still hit Retry on the next interaction.
+});
 
 // Per-field shape check so a corrupted / hand-edited scratchpad
 // can't drive replay with garbage. The replay loop only handles
