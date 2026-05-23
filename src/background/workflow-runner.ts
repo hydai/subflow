@@ -160,12 +160,20 @@ export async function runWorkflow(
       timestamp,
     };
   }
+  // SPEC §7.6 narrows truncation to 4xx / 5xx; 3xx redirect bodies
+  // also surface as outcome:"http-error" (fetch's Response.ok is
+  // false for 3xx too) but their bodies are usually short notices
+  // and shouldn't carry the truncation marker. The sidebar's
+  // truncateBody helper has the symmetric guard; keep both sides
+  // aligned so the sidebar receives bodies it doesn't need to
+  // re-truncate.
+  const shouldTruncate = response.status >= 400 && response.status <= 599;
   return {
     workflowId: workflow.id,
     workflowName: workflow.name,
     outcome: "http-error",
     statusCode: response.status,
-    body: truncate(responseBody, ERROR_BODY_CHAR_LIMIT),
+    body: shouldTruncate ? truncate(responseBody, ERROR_BODY_CHAR_LIMIT) : responseBody,
     timestamp,
   };
 }

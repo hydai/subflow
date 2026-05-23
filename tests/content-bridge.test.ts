@@ -15,6 +15,14 @@ const ALLOWED_CONTENT_TAGS = new Set([
   PLAYER_DATA_POSTMESSAGE_TAG,
   "subflow:video-changed",
   "subflow:request-reextraction",
+  // Sidebar UI message contract (#12). Outbound from the content
+  // script:
+  "subflow:request-subtitle",
+  "subflow:execute-workflow",
+  "subflow:refetch-subtitle",
+  // Inbound to the content script (background pushes):
+  "subflow:subtitle-result",
+  "subflow:workflow-result",
 ]);
 
 // The matched-quote regex below intentionally catches `subflow:*`

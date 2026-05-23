@@ -257,4 +257,80 @@ describe("SubtitleService", () => {
     expect(result.status).toBe("parse-failed");
     expect(fetchSubtitleXml).not.toHaveBeenCalled();
   });
+
+  describe("buildPromptVariables", () => {
+    it("returns null when nothing is cached for the (tabId, videoId)", () => {
+      const service = new SubtitleService({ fetchSubtitleXml: vi.fn() });
+      expect(service.buildPromptVariables(1, "abc")).toBeNull();
+    });
+
+    it("returns null when player data exists but no subtitle has been fetched", () => {
+      const service = new SubtitleService({ fetchSubtitleXml: vi.fn() });
+      service.recordPlayerData(
+        1,
+        makePlayerData({ videoId: "abc", tracks: [enTrack] }),
+      );
+      expect(service.buildPromptVariables(1, "abc")).toBeNull();
+    });
+
+    it("returns variables assembled from player data + cached subtitle after a successful fetch", async () => {
+      const fetchSubtitleXml = vi.fn().mockResolvedValue(SAMPLE_XML);
+      const service = new SubtitleService({ fetchSubtitleXml });
+      const playerData: PlayerDataState = {
+        ok: true,
+        data: {
+          videoDetails: {
+            videoId: "abc",
+            isLive: false,
+            isUpcoming: false,
+            lengthSeconds: 42,
+            title: "Test title",
+            author: "Test channel",
+          },
+          captionTracks: [enTrack],
+        },
+      };
+      service.recordPlayerData(1, playerData);
+      await service.getSubtitle(1, "abc", ["en"]);
+      const vars = service.buildPromptVariables(1, "abc");
+      expect(vars).not.toBeNull();
+      expect(vars?.video_id).toBe("abc");
+      expect(vars?.video_url).toBe("https://www.youtube.com/watch?v=abc");
+      expect(vars?.title).toBe("Test title");
+      expect(vars?.channel).toBe("Test channel");
+      expect(vars?.duration_seconds).toBe(42);
+      expect(vars?.language).toBe("en");
+      // SAMPLE_XML has one <text>hello</text>; parser should yield it.
+      expect(vars?.transcript).toContain("hello");
+    });
+
+    it("uses the most-recently-served language when multiple cache entries exist", async () => {
+      const fetchSubtitleXml = vi.fn().mockResolvedValue(SAMPLE_XML);
+      const service = new SubtitleService({ fetchSubtitleXml });
+      const jaTrack: CaptionTrack = {
+        baseUrl: "https://yt/api/timedtext?v=abc&lang=ja",
+        languageCode: "ja",
+        isTranslatable: true,
+      };
+      service.recordPlayerData(
+        1,
+        makePlayerData({ videoId: "abc", tracks: [enTrack, jaTrack] }),
+      );
+      // First fetch picks "en" (first in priority).
+      await service.getSubtitle(1, "abc", ["en"]);
+      // Then the user changes priority — "ja" wins and gets served.
+      await service.getSubtitle(1, "abc", ["ja"]);
+      const vars = service.buildPromptVariables(1, "abc");
+      expect(vars?.language).toBe("ja");
+    });
+
+    it("returns null when player data exists but for a different videoId", () => {
+      const service = new SubtitleService({ fetchSubtitleXml: vi.fn() });
+      service.recordPlayerData(
+        1,
+        makePlayerData({ videoId: "OTHER", tracks: [enTrack] }),
+      );
+      expect(service.buildPromptVariables(1, "abc")).toBeNull();
+    });
+  });
 });

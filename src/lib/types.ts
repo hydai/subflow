@@ -151,7 +151,18 @@ export interface PromptVariables {
 // SPEC §6.4 — Sidebar state and workflow results
 // --------------------------------------------------------------------
 
-export type WorkflowOutcome = "success" | "http-error" | "network-error" | "timeout" | "aborted";
+export type WorkflowOutcome =
+  | "success"
+  | "http-error"
+  | "network-error"
+  | "timeout"
+  | "aborted"
+  // Precondition not met — e.g. the subtitle hasn't been fetched
+  // yet, so the prompt variables can't be assembled. Distinct from
+  // "network-error" so the sidebar can style it differently and the
+  // user is told to wait / retry instead of suspecting a fetch
+  // failure.
+  | "precondition-failed";
 
 export interface WorkflowResult {
   workflowId: string;
