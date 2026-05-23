@@ -799,10 +799,16 @@ function formatOutcomeLabel(result: WorkflowResult): string {
     case "success":
       return `Success (HTTP ${result.statusCode})`;
     case "http-error":
-      if (result.statusCode !== undefined && result.statusCode >= 500) {
+      if (result.statusCode === undefined) return "HTTP error";
+      if (result.statusCode >= 500 && result.statusCode <= 599) {
         return `Server error (HTTP ${result.statusCode})`;
       }
-      return `Client error (HTTP ${result.statusCode})`;
+      if (result.statusCode >= 400 && result.statusCode <= 499) {
+        return `Client error (HTTP ${result.statusCode})`;
+      }
+      // 3xx (Response.ok is also false for these) — surface the
+      // status code without falsely calling it a client error.
+      return `HTTP ${result.statusCode}`;
     case "timeout":
       return "Timed out after 60 seconds";
     case "aborted":

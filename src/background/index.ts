@@ -150,10 +150,20 @@ async function writeInFlight(
 // the originating tab.
 void replayInterruptedWorkflows();
 async function replayInterruptedWorkflows(): Promise<void> {
-  const residual = await readInFlight();
-  const entries = Object.values(residual);
+  // Route the snapshot+clear through the serialised queue so we
+  // can't race a concurrent execute-workflow dispatch. The queued
+  // op atomically: (a) reads the current scratchpad, (b) captures
+  // the entries to replay, (c) clears the scratchpad. Any
+  // dispatches queued AFTER this op will see an empty scratchpad
+  // and proceed normally; any dispatches queued BEFORE will be
+  // observed here as residual entries (and we replay them — they
+  // belonged to a worker generation that didn't complete).
+  let entries: InFlightRecord[] = [];
+  await enqueueInFlightOp((current) => {
+    entries = Object.values(current);
+    return {};
+  });
   if (entries.length === 0) return;
-  await writeInFlight({});
   for (const record of entries) {
     try {
       await chrome.tabs.sendMessage(record.tabId, {
@@ -582,21 +592,26 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         // Ensure the record write completes before any clear; await
         // it inside each resolution branch via recordingPromise.
         dispatch
-          .then((result) => {
+          .then(async (result) => {
             // autoRun dedup: a null result means "this (tabId,
             // videoId, workflowId) has already fired in this tab".
             // Still send a response so the sender's promise settles,
             // but mark it suppressed so the sidebar doesn't add an
             // entry to the result list.
+            // Clear the in-flight record BEFORE sendResponse so
+            // that if the service worker is terminated immediately
+            // after this microtask, the next worker generation
+            // doesn't replay this resolved request as
+            // "interrupted". The recordingPromise.then() chain
+            // guarantees the record write landed before the
+            // clear, and the await keeps the worker alive (and
+            // the sendResponse channel open) until the clear has
+            // hit storage.
+            await recordingPromise.then(() =>
+              clearInFlight(message.requestId),
+            );
             if (result === null) {
-              // Dedup hit — no actual request was issued, so the
-              // in-flight record needs to come back off the
-              // storage scratchpad. The recordingPromise await
-              // ensures the original record landed before the
-              // clear so the two operations can't reorder.
-              void recordingPromise.then(() =>
-                clearInFlight(message.requestId),
-              );
+              // Dedup hit — no actual request was issued.
               sendResponse({
                 videoId: message.videoId,
                 requestId: message.requestId,
@@ -605,7 +620,6 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
               });
               return;
             }
-            void recordingPromise.then(() => clearInFlight(message.requestId));
             // SPEC §6.7: aborted requests do not produce sidebar
             // entries.
             sendResponse({
@@ -615,8 +629,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
               suppressed: result.outcome === "aborted",
             });
           })
-          .catch((err: unknown) => {
-            void recordingPromise.then(() => clearInFlight(message.requestId));
+          .catch(async (err: unknown) => {
+            await recordingPromise.then(() =>
+              clearInFlight(message.requestId),
+            );
             sendResponse({
               videoId: message.videoId,
               requestId: message.requestId,
