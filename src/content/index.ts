@@ -98,6 +98,12 @@ function syncSidebar(): void {
       sidebarShadow = null;
     }
     sidebarState = null;
+    // SPEC §6.8: workflow / preference changes take effect on the
+    // NEXT watch-page LOAD. Leaving and re-entering /watch counts
+    // as a new load, so drop the cache so the next mount re-reads
+    // from storage.
+    cachedWorkflows = null;
+    workflowsLoadFailed = false;
     renderEpoch += 1;
     return;
   }
@@ -347,6 +353,8 @@ async function loadWorkflows(): Promise<Workflow[]> {
           // raise the failure flag when the storage API itself
           // failed (above).
           cachedWorkflows = [];
+          // Successful read; clear any stale failure flag.
+          workflowsLoadFailed = false;
           resolve(cachedWorkflows);
           return;
         }
@@ -357,6 +365,7 @@ async function loadWorkflows(): Promise<Workflow[]> {
         // non-object.
         const sanitized = (raw as unknown[]).filter(isWorkflowShape);
         cachedWorkflows = sanitized;
+        workflowsLoadFailed = false;
         resolve(sanitized);
       });
     } catch {
@@ -368,13 +377,22 @@ async function loadWorkflows(): Promise<Workflow[]> {
 
 // Matches the background's isWorkflow validator so the sidebar
 // can't render a button for a workflow that the background would
-// reject. Symmetric across the wire: same fields, same constraints.
+// reject. Symmetric across the wire: same fields, same URL
+// constraints (WHATWG URL parse + https: scheme + non-empty
+// hostname), same Content-Type rejection.
 function isWorkflowShape(value: unknown): value is Workflow {
   if (value === null || typeof value !== "object") return false;
   const w = value as Record<string, unknown>;
   if (typeof w.id !== "string" || w.id.length === 0) return false;
   if (typeof w.name !== "string" || w.name.length === 0) return false;
-  if (typeof w.url !== "string" || !w.url.startsWith("https://")) return false;
+  if (typeof w.url !== "string") return false;
+  try {
+    const parsed = new URL(w.url);
+    if (parsed.protocol !== "https:") return false;
+    if (parsed.hostname.length === 0) return false;
+  } catch {
+    return false;
+  }
   if (typeof w.promptTemplate !== "string" || w.promptTemplate.length === 0) {
     return false;
   }
@@ -595,13 +613,35 @@ function renderRefreshButton(state: SidebarUiState): HTMLElement {
   button.className = "subflow-refresh-button";
   button.textContent = "Refresh subtitle";
   button.addEventListener("click", () => {
-    void chrome.runtime.sendMessage({
-      type: "subflow:refetch-subtitle",
-      videoId: state.videoId,
-    });
+    void refreshSubtitle(state.videoId);
   });
   wrap.appendChild(button);
   return wrap;
+}
+
+async function refreshSubtitle(videoId: string): Promise<void> {
+  // Two-step: ask the background to invalidate its cache for this
+  // video, then trigger a fresh request-subtitle so the sidebar's
+  // subtitle status repaints. Without the second step, refetch-
+  // subtitle just clears the cache and leaves the UI stuck on the
+  // old "Loaded …" status until the next user action.
+  if (sidebarShadow === null) return;
+  // Optimistically reset the status to "Loading…" so the user gets
+  // immediate feedback that the click was received.
+  if (sidebarState !== null && sidebarState.videoId === videoId) {
+    sidebarState.subtitle = null;
+    paintSidebar(sidebarShadow, sidebarState);
+  }
+  try {
+    await chrome.runtime.sendMessage({
+      type: "subflow:refetch-subtitle",
+      videoId,
+    });
+  } catch {
+    // Background unreachable; the requestSubtitle below will surface
+    // the failure in its own way.
+  }
+  void requestSubtitle(videoId, sidebarShadow, renderEpoch);
 }
 
 async function triggerWorkflow(
