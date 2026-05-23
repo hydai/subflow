@@ -4,7 +4,7 @@ All notable changes to Subflow are documented in this file. The format is based 
 
 ## [0.1.0] — 2026-05-23
 
-First release. The full SPEC.md scope (issues #1–#20) is implemented and unit-tested. No Chrome Web Store listing yet; install via the developer-build steps in [`README.md`](./README.md).
+First release. The full SPEC.md scope (issues #1–#20) is implemented. The core extraction, runner, storage, prompt-substitution, content-bridge, orchestrator, and validator modules are covered by the unit tests in [`tests/`](./tests/); the UI render layer and the packaging step are exercised manually via [`docs/qa-checklist.md`](./docs/qa-checklist.md). No Chrome Web Store listing yet; install via the developer-build steps in [`README.md`](./README.md).
 
 ### Added — background pipeline
 

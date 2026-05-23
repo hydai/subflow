@@ -2,7 +2,7 @@
 
 Subflow is a Chrome extension that turns YouTube video subtitles into input for your own AI workflows. The design has no Subflow-controlled backend: subtitles are read on-device, and workflow requests go directly from your browser to whatever HTTPS endpoint you configure.
 
-> **Status**: `v0.1.0` candidate. The end-to-end pipeline — subtitle extraction, caption-track selection, XML parsing, in-memory cache, prompt substitution, HTTP POST runner with timeout / error coverage / service-worker termination replay, manual + auto-run trigger semantics, SPA-driven sidebar lifecycle, options page with workflow CRUD and language priority editor, and Web Store packaging — is implemented and unit-tested. A Chrome Web Store listing has not yet been published; until it is, install via the developer-build steps below. See [`CHANGELOG.md`](./CHANGELOG.md) for the release notes.
+> **Status**: `v0.1.0` candidate. The end-to-end pipeline — subtitle extraction, caption-track selection, XML parsing, in-memory cache, prompt substitution, HTTP POST runner with timeout / error coverage / service-worker termination replay, manual + auto-run trigger semantics, SPA-driven sidebar lifecycle, and options page with workflow CRUD and language priority editor — is implemented. The core extraction / selection / parsing / cache / runner / storage / substitution / content-bridge / orchestrator / validator modules are covered by the unit tests in [`tests/`](./tests/); the UI render layer and the packaging step (`scripts/package.mjs`) are exercised manually via [`docs/qa-checklist.md`](./docs/qa-checklist.md). A Chrome Web Store listing has not yet been published; until it is, install via the developer-build steps below. See [`CHANGELOG.md`](./CHANGELOG.md) for the release notes.
 
 ## What Subflow does (per [`SPEC.md`](./SPEC.md))
 
@@ -64,7 +64,7 @@ A Chrome Web Store listing has not yet been published; `npm run package` already
 
    - **Auto-run**: tick this if you want the workflow to fire automatically when you open a video.
 4. Save. Subflow stores the workflow in `chrome.storage.local`; nothing leaves your browser at this step.
-5. Open a YouTube video with captions. The sidebar appears, click your workflow's button, and the rendered AI response shows up in the recent-results list.
+5. Open a YouTube video with captions. The sidebar appears. Click your workflow's button, and the rendered AI response shows up in the recent-results list.
 
 ## Screenshots
 
