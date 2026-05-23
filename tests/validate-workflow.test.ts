@@ -51,6 +51,27 @@ describe("validateWorkflow (SPEC §7.4)", () => {
     expect(errors.some((e) => e.field === "url")).toBe(true);
   });
 
+  it("accepts a URL with leading and trailing whitespace (trims before scheme check)", () => {
+    const errors = validateWorkflow(
+      workflow({ url: "  https://example.com/api  " }),
+    );
+    expect(errors.some((e) => e.field === "url")).toBe(false);
+  });
+
+  it("rejects whitespace-only URL as required, not as scheme", () => {
+    const errors = validateWorkflow(workflow({ url: "   " }));
+    const urlErr = errors.find((e) => e.field === "url");
+    expect(urlErr).toBeDefined();
+    expect(urlErr?.message).toMatch(/required/);
+  });
+
+  it("accepts uppercase HTTPS scheme (URL schemes are case-insensitive per RFC 3986)", () => {
+    const errors = validateWorkflow(
+      workflow({ url: "HTTPS://example.com/api" }),
+    );
+    expect(errors.some((e) => e.field === "url")).toBe(false);
+  });
+
   it("rejects empty promptTemplate", () => {
     const errors = validateWorkflow(workflow({ promptTemplate: "" }));
     expect(errors.some((e) => e.field === "promptTemplate")).toBe(true);

@@ -52,16 +52,17 @@ interface AppState {
   languagePriority: string[];
   edit: EditState;
   validationErrors: WorkflowValidationError[];
-  // Top-of-page banner. Carries both save failures (e.g. quota
-  // exceeded on setWorkflows) and load-time warnings (e.g.
-  // "some stored workflows were malformed"). Same surface because
-  // both classes of message live "above" the user's current focus
-  // and can't be attributed to a specific field. Field-level
-  // validation feedback uses `validationErrors` / `languageError`
-  // instead. The name kept its original "saveError" for git-blame
-  // continuity — see the banner comment in renderApp() for the
-  // current contract.
-  saveError: string | null;
+  // Top-of-page banner. Carries both save failures and load-time
+  // warnings, distinguished by `source` so the banner can be
+  // cleared by the right code path without substring-matching the
+  // message text:
+  //   - "preferences"  → resolved by a successful setPreferences
+  //   - "workflows"    → resolved by a successful setWorkflows
+  //   - "load"         → resolved by EITHER a successful save (the
+  //                      user has demonstrated the storage path
+  //                      works again; whatever was wrong at load
+  //                      time is no longer worth nagging about)
+  banner: { source: "preferences" | "workflows" | "load"; message: string } | null;
   // Inline error for the language-priority section. Lives next to
   // the section per SPEC §7.6.
   languageError: string | null;
@@ -72,9 +73,20 @@ const state: AppState = {
   languagePriority: [],
   edit: { mode: "list" },
   validationErrors: [],
-  saveError: null,
+  banner: null,
   languageError: null,
 };
+
+// Clear the banner when its `source` is in the set of sources that
+// the just-finished save resolves. "load" is resolved by anything
+// (the storage path is provably working again); "preferences" only
+// by a preferences save; "workflows" only by a workflows save.
+function clearBannerIfResolvedBy(
+  resolved: ReadonlyArray<"preferences" | "workflows" | "load">,
+): void {
+  if (state.banner === null) return;
+  if (resolved.includes(state.banner.source)) state.banner = null;
+}
 
 void bootstrap();
 
@@ -137,10 +149,13 @@ async function bootstrap(): Promise<void> {
     state.languagePriority = [];
   }
   if (!wfs.ok || !prefs.ok) {
-    state.saveError =
-      "Could not load saved settings. Showing defaults until a successful write happens.";
+    state.banner = {
+      source: "load",
+      message:
+        "Could not load saved settings. Showing defaults until a successful write happens.",
+    };
   } else if (loadWarning !== null) {
-    state.saveError = loadWarning;
+    state.banner = { source: "load", message: loadWarning };
   }
   render();
 }
@@ -215,8 +230,8 @@ function renderApp(): HTMLElement[] {
       ? renderEditForm(state.edit.draft, state.edit.headerRows, state.edit.isNew)
       : renderWorkflowsList();
   const globalErr =
-    state.saveError !== null
-      ? [el("p", { class: "error global", role: "alert" }, state.saveError)]
+    state.banner !== null
+      ? [el("p", { class: "error global", role: "alert" }, state.banner.message)]
       : [];
   return [h1, ...globalErr, langSection, workflowsSection];
 }
@@ -324,24 +339,10 @@ async function saveLanguages(): Promise<void> {
   }
   state.languagePriority = trimmed;
   state.languageError = null;
-  // The saveError banner carries TWO kinds of message:
-  //   (a) preferences-related — load warning about malformed
-  //       language priority, or a previous setPreferences failure
-  //   (b) workflows-related — workflow load warnings or
-  //       setWorkflows failures
-  // A successful setPreferences only proves the (a) class of
-  // warning is resolved; (b) is still unaddressed. Look at the
-  // current banner text and clear only when it's an (a)-class
-  // message; leave workflow-related banners in place so the user
-  // doesn't lose context. Both classes use a distinct text prefix
-  // so this is just a substring check.
-  if (
-    state.saveError !== null &&
-    (state.saveError.includes("language") ||
-      state.saveError.includes("preferences"))
-  ) {
-    state.saveError = null;
-  }
+  // A successful setPreferences clears any preferences-class banner
+  // AND any "load" banner (storage path is provably working again).
+  // Workflow-class banners survive.
+  clearBannerIfResolvedBy(["preferences", "load"]);
   render();
 }
 
@@ -462,22 +463,15 @@ function enqueuePersist(next: Workflow[]): Promise<void> {
 async function persistAndCommit(next: Workflow[]): Promise<void> {
   const result = await setWorkflows(next);
   if (!result.ok) {
-    state.saveError = `Could not save workflows: ${result.error.type}: ${result.error.message}`;
+    state.banner = {
+      source: "workflows",
+      message: `Could not save workflows: ${result.error.type}: ${result.error.message}`,
+    };
     render();
     return;
   }
   state.workflows = next;
-  // Only clear workflow-related saveError variants. A preferences-
-  // class warning (e.g. "Stored language priority was malformed")
-  // is NOT addressed by a successful workflow write, so leave it
-  // alone. The languages save path has the symmetric guard.
-  if (
-    state.saveError !== null &&
-    (state.saveError.includes("workflow") ||
-      state.saveError.includes("Some stored workflows"))
-  ) {
-    state.saveError = null;
-  }
+  clearBannerIfResolvedBy(["workflows", "load"]);
   render();
 }
 
@@ -681,33 +675,30 @@ function renderHeaderRow(
 }
 
 async function saveWorkflow(draft: Workflow, isNew: boolean): Promise<void> {
+  // Sanitize trim-able fields BEFORE validating so the persisted
+  // value is the user's intended URL / name / template, without
+  // accidental whitespace that the validator already tolerates.
+  draft.url = draft.url.trim();
+  draft.name = draft.name.trim();
+  draft.promptTemplate = draft.promptTemplate.trim();
   state.validationErrors = validateWorkflow(draft);
   if (state.validationErrors.length > 0) {
     render();
     return;
   }
+  const baseWorkflows = latestPending() ?? state.workflows;
   const next = isNew
-    ? [...state.workflows, draft]
-    : state.workflows.map((w) => (w.id === draft.id ? draft : w));
-  const result = await setWorkflows(next);
-  if (!result.ok) {
-    // Stay in edit mode so the user can adjust and retry; the
-    // unpersisted draft is preserved in state.edit.draft.
-    state.saveError = `Could not save workflow: ${result.error.type}: ${result.error.message}`;
-    render();
-    return;
-  }
-  state.workflows = next;
+    ? [...baseWorkflows, draft]
+    : baseWorkflows.map((w) => (w.id === draft.id ? draft : w));
+  // Route through the persist queue so saveWorkflow can't race a
+  // reorder/delete still in flight. enqueuePersist's commit path
+  // handles state.workflows assignment + the banner clear.
+  await enqueuePersist(next);
+  // Exit edit mode regardless of write outcome — if the write
+  // failed, the banner already reflects that and the user can
+  // re-enter edit mode from the list to retry.
   state.edit = { mode: "list" };
   state.validationErrors = [];
-  // Symmetric to persistAndCommit: clear workflow-class banner only.
-  if (
-    state.saveError !== null &&
-    (state.saveError.includes("workflow") ||
-      state.saveError.includes("Some stored workflows"))
-  ) {
-    state.saveError = null;
-  }
   render();
 }
 
