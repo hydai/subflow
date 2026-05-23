@@ -80,12 +80,16 @@ function syncSidebar(): void {
   if (info === null) {
     // Off the watch route — remove the sidebar but keep `lastVideoId`
     // so a return to /watch with a different id still triggers
-    // video-changed.
+    // video-changed. Drop sidebarState too so the workflows array,
+    // result list, and cached subtitle stop occupying memory for
+    // the (possibly long-lived) period the user is browsing
+    // non-watch pages.
     if (sidebarRoot !== null) {
       sidebarRoot.remove();
       sidebarRoot = null;
       sidebarShadow = null;
     }
+    sidebarState = null;
     return;
   }
 
@@ -179,9 +183,6 @@ interface SidebarState {
   subtitle: SubtitleResult | null;
   // Newest first, capped at 5 (SPEC §6.4 result list).
   results: WorkflowResult[];
-  // Pending workflow requests indexed by requestId so the result
-  // handler can match the response to its initiating click.
-  pendingRequests: Map<string, { workflow: Workflow; startedAt: number }>;
   // videoId scope for the current sidebar instance. Reset on every
   // SPA navigation.
   videoId: string;
@@ -209,7 +210,6 @@ async function renderSidebar(
     workflows: [],
     subtitle: null,
     results: [],
-    pendingRequests: new Map(),
     videoId,
   };
   paintSidebar(shadow, sidebarState);
@@ -219,8 +219,8 @@ async function renderSidebar(
     // don't overwrite the newer videoId's state.
     return;
   }
-  // Preserve any subtitle / results / pendingRequests that landed
-  // during the await. Only overwrite workflows.
+  // Preserve any subtitle / results that landed during the await.
+  // Only overwrite workflows.
   if (sidebarState !== null && sidebarState.videoId === videoId) {
     sidebarState.workflows = workflows;
   } else {
@@ -228,7 +228,6 @@ async function renderSidebar(
       workflows,
       subtitle: null,
       results: [],
-      pendingRequests: new Map(),
       videoId,
     };
   }
@@ -507,10 +506,6 @@ async function triggerWorkflow(
 ): Promise<void> {
   if (sidebarState === null) return;
   const requestId = `req-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  sidebarState.pendingRequests.set(requestId, {
-    workflow,
-    startedAt: Date.now(),
-  });
   try {
     const response = (await chrome.runtime.sendMessage({
       type: "subflow:execute-workflow",
@@ -594,6 +589,15 @@ interface WorkflowResponse {
   suppressed?: boolean;
 }
 
+const VALID_WORKFLOW_OUTCOMES = new Set([
+  "success",
+  "http-error",
+  "network-error",
+  "timeout",
+  "aborted",
+  "precondition-failed",
+]);
+
 function isWorkflowResponse(value: unknown): value is WorkflowResponse {
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
@@ -602,13 +606,33 @@ function isWorkflowResponse(value: unknown): value is WorkflowResponse {
   if (v.result === null) return true;
   if (v.result === undefined || typeof v.result !== "object") return false;
   const r = v.result as Record<string, unknown>;
-  return (
-    typeof r.workflowId === "string" &&
-    typeof r.workflowName === "string" &&
-    typeof r.outcome === "string" &&
-    typeof r.body === "string" &&
-    typeof r.timestamp === "number"
-  );
+  if (typeof r.workflowId !== "string") return false;
+  if (typeof r.workflowName !== "string") return false;
+  if (typeof r.outcome !== "string") return false;
+  // Reject unknown outcomes so formatOutcomeLabel's switch can't
+  // fall through and render `undefined`. If a future variant lands
+  // we'll need to update both this set AND the formatter together.
+  if (!VALID_WORKFLOW_OUTCOMES.has(r.outcome)) return false;
+  if (typeof r.body !== "string") return false;
+  if (typeof r.timestamp !== "number") return false;
+  // statusCode is only meaningful for success / http-error and must
+  // be a number if present. Reject if it's present but malformed.
+  if (
+    r.statusCode !== undefined &&
+    (typeof r.statusCode !== "number" || !Number.isFinite(r.statusCode))
+  ) {
+    return false;
+  }
+  // For success / http-error, statusCode MUST be present so
+  // formatOutcomeLabel can render "HTTP 200" / "HTTP 503" without
+  // showing "HTTP undefined".
+  if (
+    (r.outcome === "success" || r.outcome === "http-error") &&
+    typeof r.statusCode !== "number"
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function isSubtitleResultLike(value: unknown): boolean {
@@ -636,7 +660,6 @@ function handleWorkflowResponse(
 ): void {
   if (sidebarState === null) return;
   if (response.videoId !== sidebarState.videoId) return;
-  sidebarState.pendingRequests.delete(response.requestId);
   if (response.suppressed === true) return;
   if (response.result === null) return;
   sidebarState.results = addResult(sidebarState.results, response.result);
