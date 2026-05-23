@@ -1,0 +1,115 @@
+# Triggered by pushing a `vX.Y.Z` tag (e.g. `v0.1.0`). The workflow
+# verifies that the tag matches `package.json`, that `CHANGELOG.md`
+# has a matching `## [x.y.z]` section, runs the standard
+# `npm run package` chain (typecheck -> test -> build -> zip, which
+# also enforces `package.json` <-> `public/manifest.json` agreement),
+# and creates a GitHub Release with the zip attached and the
+# CHANGELOG section as the release body.
+#
+# Security notes:
+#
+#   - The only external input is `GITHUB_REF_NAME` (the tag name).
+#     Only users with write access to the repo can push tags, and
+#     the first step validates the tag matches a strict semver
+#     regex before any later step uses it. No `github.event.*`
+#     fields (issue / PR / commit messages, author names, etc.)
+#     are read or interpolated.
+#   - All shell interpolations use bash variables (quoted) rather
+#     than `${{ ... }}` substitutions inside `run:` blocks, so a
+#     malformed tag cannot inject shell metacharacters.
+#   - `permissions:` is scoped to `contents: write` only, the
+#     minimum required to create a release.
+#
+# See RELEASE.md for the human runbook (version bump + CHANGELOG
+# update + tag push) that precedes this workflow firing.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, package, and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate tag format
+        run: |
+          if ! printf '%s' "${GITHUB_REF_NAME}" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' does not match the required 'vMAJOR.MINOR.PATCH' format (e.g. 'v0.1.0'). Refusing to proceed."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify tag matches package.json version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [ "${TAG_VERSION}" != "${PKG_VERSION}" ]; then
+            echo "::error::Tag '${GITHUB_REF_NAME}' implies version '${TAG_VERSION}' but package.json is '${PKG_VERSION}'. Bump package.json and public/manifest.json before tagging."
+            exit 1
+          fi
+          echo "VERSION=${PKG_VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Verify CHANGELOG.md has a section for this version
+        run: |
+          if ! grep -qE "^## \[${VERSION}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [${VERSION}]' section. Update the heading from '## [Unreleased]' to '## [${VERSION}] - YYYY-MM-DD' before tagging."
+            exit 1
+          fi
+
+      - name: Run typecheck, tests, build, and package
+        run: npm run package
+
+      - name: Verify the expected zip artifact exists
+        run: |
+          ZIP="subflow-v${VERSION}.zip"
+          if [ ! -f "${ZIP}" ]; then
+            echo "::error::Expected '${ZIP}' was not produced by 'npm run package'."
+            exit 1
+          fi
+          echo "ZIP=${ZIP}" >> "${GITHUB_ENV}"
+
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          # Capture the lines from "## [VERSION]" up to (but not
+          # including) the next "## [" heading or EOF. The opening
+          # heading itself is captured too, so the GitHub Release
+          # body has the version heading for readability.
+          awk -v ver="${VERSION}" '
+            $0 ~ ("^## \\[" ver "\\]") { capture = 1; print; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "::error::Extracted release notes are empty - check CHANGELOG.md formatting."
+            exit 1
+          fi
+          echo "--- Extracted release notes preview ---"
+          head -50 release-notes.md
+          echo "----------------------------------------"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "Subflow ${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            "${ZIP}"
