@@ -815,12 +815,13 @@ function formatOutcomeLabel(result: WorkflowResult): string {
       // Surface the duration so the user knows WHY it gave up. The
       // body field carries the canonical "Request timed out after
       // Ns" string from the runner, so we forward whatever number
-      // appears there rather than hard-coding 60 seconds. If the
-      // body doesn't match the expected pattern, fall back to a
-      // plain label.
+      // appears there rather than hard-coding 60. If the body
+      // doesn't match the expected pattern, fall back to a plain
+      // label. Pluralisation: "1 second" vs "N seconds".
       const m = result.body.match(/after\s+(\d+(?:\.\d+)?)\s*s/i);
-      if (m !== null) return `Timed out after ${m[1]}s`;
-      return "Timed out";
+      if (m === null) return "Timed out";
+      const seconds = m[1];
+      return `Timed out after ${seconds} ${seconds === "1" ? "second" : "seconds"}`;
     }
     case "aborted":
       return "Aborted";

@@ -209,14 +209,14 @@ async function replayInterruptedWorkflows(): Promise<void> {
   let entries: InFlightRecord[] = [];
   await enqueueInFlightOp((current) => {
     entries = Object.values(current).filter(isInFlightRecord);
-    // Write only when the scratchpad isn't ALREADY clean. The
-    // current map is clean if it has no keys, OR it has keys but
-    // every one of them is a valid InFlightRecord that we're
-    // about to drain. If any key is malformed, write an empty
-    // object so the garbage is purged even when we have nothing
-    // valid to replay.
-    const allKeysCount = Object.keys(current).length;
-    if (allKeysCount === 0) return current;
+    // Clear the scratchpad on any non-empty input — both the
+    // valid records we're about to drain (so the next wake
+    // doesn't replay them) AND any malformed garbage that
+    // wouldn't be replayed but would otherwise persist forever.
+    // Skip the write only when the scratchpad is already empty,
+    // saving an unnecessary chrome.storage.local.set on every
+    // clean service-worker start.
+    if (Object.keys(current).length === 0) return current;
     return {};
   });
   if (entries.length === 0) return;
