@@ -754,11 +754,23 @@ function renderResultEntry(result: WorkflowResult): HTMLElement {
   // wake). NOT 4xx (user-config error) and NOT aborted (suppressed
   // by the response handler anyway).
   if (shouldOfferRetry(result)) {
-    item.appendChild(
-      ctaButton("Retry", () => {
-        void retryWorkflow(result.workflowId);
-      }),
-    );
+    const retryButton = ctaButton("Retry", () => {
+      void retryWorkflow(result.workflowId);
+    }) as HTMLButtonElement;
+    // Mirror the main workflow button's gating: Retry is a no-op
+    // when the subtitle isn't ready, so disable it visually
+    // instead of leaving a clickable control that silently does
+    // nothing.
+    if (sidebarState !== null) {
+      const subtitleReady =
+        sidebarState.subtitle !== null &&
+        sidebarState.subtitle.status === "ok";
+      if (!subtitleReady) {
+        retryButton.disabled = true;
+        retryButton.title = "Waiting for subtitle to load.";
+      }
+    }
+    item.appendChild(retryButton);
   }
 
   return item;
@@ -1068,10 +1080,36 @@ function handleWorkflowResponse(
   if (response.videoId !== sidebarState.videoId) return;
   if (response.suppressed === true) return;
   if (response.result === null) return;
-  // Dedup by requestId so a single logical request (e.g. one that
-  // a service-worker termination produced two responses for —
-  // local synthetic + replay) lands at most once in the list.
-  if (sidebarState.seenRequestIds.has(response.requestId)) return;
+  // Dedup by requestId so a single logical request that produces
+  // two responses (e.g. service-worker termination: triggerWorkflow's
+  // catch emits a local network-error first, then
+  // replayInterruptedWorkflows pushes outcome:"interrupted" later
+  // for the same requestId) lands at most once in the list. We
+  // prefer the more SPECIFIC outcome — if a previous local guess
+  // already rendered as "network-error" and a more accurate
+  // "interrupted" replay arrives later, swap the entry in place.
+  if (sidebarState.seenRequestIds.has(response.requestId)) {
+    if (response.result.outcome === "interrupted") {
+      const existingIdx = sidebarState.results.findIndex(
+        (r, _i) =>
+          // The result type doesn't carry requestId, so identify the
+          // already-rendered entry by workflowId + the same
+          // workflow-level network-error placeholder we want to
+          // replace. This is best-effort; if the user has triggered
+          // the same workflow multiple times, the most recent
+          // matching entry is replaced.
+          r.workflowId === response.result?.workflowId &&
+          r.outcome === "network-error",
+      );
+      if (existingIdx !== -1) {
+        const next = [...sidebarState.results];
+        next[existingIdx] = response.result;
+        sidebarState.results = next;
+        paintSidebar(shadow, sidebarState);
+      }
+    }
+    return;
+  }
   sidebarState.seenRequestIds.add(response.requestId);
   // FIFO trim. Set iteration order is insertion order, so the
   // first key is the oldest. Drop until we're under the cap.
