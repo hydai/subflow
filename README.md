@@ -66,6 +66,10 @@ A Chrome Web Store listing has not yet been published; `npm run package` already
 4. Save. Subflow stores the workflow in `chrome.storage.local`; nothing leaves your browser at this step.
 5. Open a YouTube video with captions. The sidebar appears, click your workflow's button, and the rendered AI response shows up in the recent-results list.
 
+## Screenshots
+
+UI captures are deferred to a follow-up release; see [`docs/screenshots/`](./docs/screenshots/) for the list of planned screenshots.
+
 ## Prompt template variables
 
 | Variable | Always defined? | Content |
