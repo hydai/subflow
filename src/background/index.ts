@@ -95,35 +95,39 @@ function enqueueInFlightOp(
 }
 
 async function readInFlight(): Promise<Record<string, InFlightRecord>> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     try {
       chrome.storage.local.get([IN_FLIGHT_STORAGE_KEY], (items) => {
         // chrome.storage callbacks report failures via
-        // chrome.runtime.lastError, not throws. Treat any error
-        // as "no readable state" and fall back to empty so the
-        // queue keeps progressing.
+        // chrome.runtime.lastError, not throws. Propagate the
+        // error rather than silently returning {} — otherwise
+        // enqueueInFlightOp would compute a new state from a fake
+        // empty base and writeInFlight would clobber any real
+        // entries that exist.
         const last = chrome.runtime.lastError;
         if (last !== undefined && last !== null) {
-          resolve({});
+          reject(new Error(last.message ?? "chrome.storage.local.get failed"));
           return;
         }
         const raw = items?.[IN_FLIGHT_STORAGE_KEY];
-        // Storage could have been hand-edited or saved by an older
-        // schema; accept ONLY plain objects, reject null / arrays /
-        // other types so Object.values(...) can't produce surprises.
-        if (
-          raw === null ||
-          raw === undefined ||
-          typeof raw !== "object" ||
-          Array.isArray(raw)
-        ) {
+        // No saved key at all is fine — that's an empty
+        // scratchpad. Only reject types we can't iterate safely.
+        if (raw === null || raw === undefined) {
           resolve({});
+          return;
+        }
+        if (typeof raw !== "object" || Array.isArray(raw)) {
+          // Saved value exists but isn't iterable as Record;
+          // surface as an error rather than silently treating as
+          // empty, since clobbering it could lose legitimate state
+          // from a future-schema worker.
+          reject(new Error("subflow.inFlightWorkflows storage shape is not a Record"));
           return;
         }
         resolve(raw as Record<string, InFlightRecord>);
       });
-    } catch {
-      resolve({});
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
     }
   });
 }
@@ -187,6 +191,12 @@ async function replayInterruptedWorkflows(): Promise<void> {
   let entries: InFlightRecord[] = [];
   await enqueueInFlightOp((current) => {
     entries = Object.values(current).filter(isInFlightRecord);
+    // Only return a new (empty) object when there's actually work
+    // to do; otherwise return `current` so enqueueInFlightOp's
+    // reference-equality check skips the storage write. Saves an
+    // unnecessary chrome.storage.local.set on every clean
+    // service-worker start.
+    if (entries.length === 0) return current;
     return {};
   });
   if (entries.length === 0) return;
