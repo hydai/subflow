@@ -430,9 +430,10 @@ function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
 
   const header = document.createElement("header");
   header.className = "subflow-header";
-  // Title is always shown; in collapsed mode the CSS hides it via
-  // .subflow-root.collapsed .subflow-title so the panel narrows to
-  // just the toggle button.
+  // Title is always present in the DOM; in collapsed mode the CSS
+  // hides it via .subflow-root.collapsed .subflow-title so the panel
+  // narrows to just the toggle button. (Keeping the node lets us
+  // re-expand without a re-render burst.)
   const title = document.createElement("span");
   title.className = "subflow-title";
   title.textContent = "Subflow";
@@ -452,8 +453,21 @@ function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
   // the actual semantics for screen readers.
   toggle.textContent = sidebarCollapsed ? "‹" : "›";
   toggle.addEventListener("click", () => {
+    // Toggle WITHOUT re-painting from scratch — the sections under
+    // .subflow-root are static at this point (DOM order doesn't
+    // change with collapsed state, only CSS visibility), so the
+    // cheaper move is to flip the class on the root and update the
+    // toggle's own attributes. This preserves keyboard focus on the
+    // toggle (which the user just clicked) and any scroll position
+    // inside the sections.
     sidebarCollapsed = !sidebarCollapsed;
-    paintSidebar(shadow, state);
+    root.classList.toggle("collapsed", sidebarCollapsed);
+    toggle.setAttribute(
+      "aria-label",
+      sidebarCollapsed ? "Expand Subflow sidebar" : "Collapse Subflow sidebar",
+    );
+    toggle.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
+    toggle.textContent = sidebarCollapsed ? "‹" : "›";
   });
   header.appendChild(toggle);
   root.appendChild(header);
