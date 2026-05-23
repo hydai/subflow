@@ -107,8 +107,13 @@ async function bootstrap(): Promise<void> {
     // non-iterable error or iterate string characters.
     const candidates = Array.isArray(wfs.value) ? (wfs.value as unknown[]) : [];
     if (!Array.isArray(wfs.value)) {
+      // Wording: this is an IN-MEMORY fallback, not a durable reset.
+      // chrome.storage.local still holds whatever malformed value
+      // was there; it'll be overwritten only when the user
+      // successfully saves something new. Avoid copy that implies
+      // we've already destroyed their data.
       loadWarning =
-        "Stored workflows were not an array; resetting to empty list.";
+        "Stored workflows were not an array; showing an empty list until you save changes.";
     }
     const repaired: Workflow[] = [];
     let droppedCount = 0;
@@ -138,12 +143,14 @@ async function bootstrap(): Promise<void> {
       } else {
         state.languagePriority = [];
         loadWarning =
-          loadWarning ?? "Stored language priority was malformed; reset to empty.";
+          loadWarning ??
+          "Stored language priority was malformed; showing an empty list until you save changes.";
       }
     } else {
       state.languagePriority = [];
       loadWarning =
-        loadWarning ?? "Stored preferences were malformed; reset to defaults.";
+        loadWarning ??
+        "Stored preferences were malformed; showing defaults until you save changes.";
     }
   } else {
     state.languagePriority = [];
