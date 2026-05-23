@@ -6,7 +6,7 @@ describe("validateLanguagePriority (SPEC §6.8 / §7.4)", () => {
     const result = validateLanguagePriority([]);
     expect(result.trimmed).toEqual([]);
     expect(result.errors.length).toBeGreaterThan(0);
-    expect(result.errors[0]?.message).toMatch(/至少需設定一個語言偏好/);
+    expect(result.errors[0]?.message).toMatch(/at least one language/i);
   });
 
   it("returns an error when the only entry trims to empty", () => {
@@ -24,7 +24,7 @@ describe("validateLanguagePriority (SPEC §6.8 / §7.4)", () => {
     expect(result.trimmed).toEqual(["zh-TW", "", "en"]);
     const middleErr = result.errors.find((e) => e.index === 1);
     expect(middleErr).toBeDefined();
-    expect(middleErr?.message).toContain("第 2 列");
+    expect(middleErr?.message).toContain("Language 2");
   });
 
   it("returns OK for a list of valid codes", () => {

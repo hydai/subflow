@@ -41,13 +41,13 @@ export interface LanguagePriorityValidationError {
   message: string;
 }
 
-// User-facing copy for the at-least-one rule. The exact wording
-// is suggested by issue #10's UX text ("至少需設定一個語言偏好"),
-// not by SPEC §7.4 (which specifies the RULE but not the EXACT
-// string). Lifted to a module-level constant so the two emit
-// sites — empty-list and all-rows-blank — can't drift if the
-// wording ever changes.
-const AT_LEAST_ONE_MESSAGE = "至少需設定一個語言偏好";
+// User-facing copy for the at-least-one rule. Issue #10's UX
+// notes suggest this wording in Chinese, but the surrounding
+// options UI is in English ("Language priority", "Save
+// languages"). For locale consistency we render in English; the
+// SPEC §7.4 RULE is preserved regardless of wording. Lifted to
+// a module-level constant so the two emit sites can't drift.
+const AT_LEAST_ONE_MESSAGE = "Add at least one language code.";
 
 export function validateLanguagePriority(
   codes: readonly string[],
@@ -69,7 +69,7 @@ export function validateLanguagePriority(
       blankRowCount += 1;
       errors.push({
         index: idx,
-        message: `第 ${idx + 1} 列語言代碼為空，請填入或移除空列`,
+        message: `Language ${idx + 1} is empty — fill it in or remove the row.`,
       });
     }
   });

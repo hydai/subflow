@@ -284,19 +284,12 @@ function renderLanguageSection(): HTMLElement {
       // reality (the user is in the middle of fixing them). Clear
       // both AND scrub the visible row errors + banner from the DOM
       // without doing a full re-render — that would blow away the
-      // user's caret in this input. The other rows' stale state
-      // also goes away because we walk every previously-rendered
-      // row error and the section banner directly.
+      // user's caret in this input.
       if (
         state.languageRowErrors.length > 0 ||
         state.languageError !== null
       ) {
         clearLanguageValidationState();
-        // Remove every row's <p id="lang-N-err"> error node and
-        // strip the aria-invalid / aria-describedby it anchored,
-        // including from rows other than this one. This way the
-        // user doesn't see a stale red message on row 2 just
-        // because they typed in row 1.
         for (let i = 0; i < state.languagePriority.length; i += 1) {
           const otherId = `lang-${i}`;
           const otherInput = document.getElementById(otherId);
@@ -305,18 +298,24 @@ function renderLanguageSection(): HTMLElement {
           const errNode = document.getElementById(`${otherId}-err`);
           errNode?.remove();
         }
-        // The section-level banner — if present — also no longer
-        // describes the current input state, so drop it. We've
-        // already removed each per-row error node via the loop
-        // above; the only `.error` left under `.lang-prefs` is the
-        // banner. (If a future change adds another error-bearing
-        // node here, narrow this selector to an id/class instead.)
         const langPrefs = document.querySelector(".lang-prefs");
         if (langPrefs !== null) {
           for (const node of Array.from(langPrefs.children)) {
             if (node.classList.contains("error")) node.remove();
           }
         }
+      }
+      // The Save button's enabled state is also derived from input
+      // contents (disabled when no row trims to non-empty). Update
+      // it directly without a full re-render to preserve the caret
+      // — same trick as the row-error scrub above.
+      const saveBtn = document.querySelector<HTMLButtonElement>(
+        "[data-role='save-languages']",
+      );
+      if (saveBtn !== null) {
+        saveBtn.disabled = !state.languagePriority.some(
+          (s) => s.trim().length > 0,
+        );
       }
     });
     const rowError = state.languageRowErrors.find((e) => e.index === idx);
@@ -386,6 +385,10 @@ function renderLanguageSection(): HTMLElement {
     saveLanguages,
     "primary",
   );
+  // Tagged for the input handler above so it can sync disabled
+  // state without doing a full re-render (which would blow away
+  // the user's caret while typing).
+  saveBtn.setAttribute("data-role", "save-languages");
   if (!hasAnyNonBlank) (saveBtn as HTMLButtonElement).disabled = true;
   addRow.appendChild(saveBtn);
   section.append(list, addRow);
