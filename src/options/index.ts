@@ -358,7 +358,15 @@ async function saveLanguages(): Promise<void> {
 function renderWorkflowsList(): HTMLElement {
   const section = el("section", { "aria-labelledby": "wf-h2" });
   section.appendChild(el("h2", { id: "wf-h2" }, "Workflows"));
-  if (state.workflows.length === 0) {
+  // Render against the latest INTENT (queued / in-flight), not the
+  // committed state. Otherwise a re-render triggered while a reorder
+  // write is in flight (e.g. the user starts typing in the language
+  // field) would paint old order rows + new pending boundary
+  // disable-states, which looks broken. By using the same source as
+  // the boundary check, rows + disabled flags stay consistent
+  // round-trip.
+  const visible = latestPending() ?? state.workflows;
+  if (visible.length === 0) {
     section.appendChild(
       el(
         "p",
@@ -368,9 +376,7 @@ function renderWorkflowsList(): HTMLElement {
     );
   } else {
     const ul = el("ul", { class: "workflow-list" });
-    state.workflows.forEach((w, idx) =>
-      ul.appendChild(renderWorkflowRow(w, idx)),
-    );
+    visible.forEach((w, idx) => ul.appendChild(renderWorkflowRow(w, idx)));
     section.appendChild(ul);
   }
   const actions = el("div", { class: "actions" });
