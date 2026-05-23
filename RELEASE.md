@@ -43,19 +43,40 @@ Before tagging, make the version consistent everywhere and the CHANGELOG accurat
 - **It doesn't maintain the `[Unreleased]` reference-link entry in the CHANGELOG.** Keeping that manual avoids accidental overwrites.
 - **It doesn't sign the artifact.** Chrome's update mechanism does its own signing once the zip is uploaded; pre-upload signing would not buy anything.
 
-## Rolling back a bad release
+## Rolling back
 
-If a release ships and a critical issue is found:
+The right rollback path depends on whether a GitHub Release has actually been published — that is the moment the tag becomes truly immutable for outside consumers.
 
-1. **Don't delete or rewrite the tag.** Tags should be immutable so external integrators (and the Web Store update history) can rely on them.
-2. Bump to the next patch version (`X.Y.(Z+1)`), document the rollback in `CHANGELOG.md`, and cut a new release using the steps above.
-3. Optionally mark the bad release as "pre-release" on GitHub via the release page so it stops being the "Latest release" link target.
+### Case A — workflow guard rejected the tag (no Release was created)
+
+`Create GitHub Release` is the workflow's final step. If any earlier guard (tag format, `package.json` version mismatch, missing CHANGELOG section, missing zip) fails, the workflow exits before that step runs and no Release is published. In that window the tag is safe to delete and re-create, because nothing external could be pointing at it yet.
+
+Verify on the Actions page that the failed run never reached `Create GitHub Release`, then:
+
+```sh
+git tag -d vX.Y.Z              # delete locally
+git push --delete origin vX.Y.Z  # delete on origin
+# fix the files (package.json, public/manifest.json, CHANGELOG.md), commit, push,
+# then re-tag the new merge commit.
+```
+
+### Case B — Release was published and the artifact is bad
+
+Once `Create GitHub Release` ran successfully, treat the tag as immutable. External integrators (and the future Chrome Web Store update history once it exists) may already be pointing at it.
+
+1. **Don't delete or rewrite the tag.** Even if the artifact is wrong, churning the tag breaks anyone who already fetched it.
+2. Bump to the next patch version (`X.Y.(Z+1)`), document the rollback in `CHANGELOG.md`, and cut a new release using the pre-release checklist and tagging steps above.
+3. Optionally mark the bad release as "pre-release" on GitHub via the release page so it stops being the "Latest release" link target. (Editing the release body to add a "⚠ Use vX.Y.(Z+1) instead" line is fine too — the tag stays put, only the human-facing metadata changes.)
+
+### Case C — Release was partially created (rare)
+
+If `gh release create` itself failed mid-way and left a draft/incomplete Release behind, delete the Release object via the GitHub UI (or `gh release delete vX.Y.Z`), then treat the situation as Case A and delete the tag too.
 
 ## When the workflow fails
 
-The workflow logs a `::error::` annotation pointing at the offending check whenever a guard fails. Common cases:
+The workflow logs a `::error::` annotation pointing at the offending check whenever a guard fails. Common cases (all of these are Case A — no Release was published, so re-tagging per the steps above is safe):
 
 - **"Tag … does not match the required 'vMAJOR.MINOR.PATCH' format"** — re-tag using the strict `vX.Y.Z` shape; pre-release suffixes (`-rc1`, `-beta`) are intentionally rejected for now because the CHANGELOG doesn't have a story for them.
-- **"Tag … implies version 'X.Y.Z' but package.json is 'A.B.C'"** — you forgot to bump `package.json` (and probably `public/manifest.json`) before tagging. Roll the tag back locally (`git tag -d vX.Y.Z && git push --delete origin vX.Y.Z`), fix the files, commit, and re-tag.
+- **"Tag … implies version 'X.Y.Z' but package.json is 'A.B.C'"** — you forgot to bump `package.json` (and probably `public/manifest.json`) before tagging. Follow the Case A delete-and-retag steps after fixing the files.
 - **"CHANGELOG.md has no '## [X.Y.Z]' section"** — same root cause as above; update the heading and re-tag.
 - **"Expected 'subflow-vX.Y.Z.zip' was not produced"** — `npm run package` succeeded but the zip name didn't match. This usually means `scripts/package.mjs` was edited; the workflow assumes the script writes exactly `subflow-v<package.json version>.zip` at the repo root.

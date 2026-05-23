@@ -69,7 +69,14 @@ jobs:
 
       - name: Verify CHANGELOG.md has a section for this version
         run: |
-          if ! grep -qE "^## \[${VERSION}\]" CHANGELOG.md; then
+          # `awk -v prefix=... '... index($0, prefix) == 1 ...'` is a
+          # LITERAL substring check anchored at column 1, not a regex
+          # match, so the dots in VERSION cannot match unintended
+          # characters the way an unescaped ERE pattern would.
+          if ! awk -v prefix="## [${VERSION}]" '
+            index($0, prefix) == 1 { found = 1; exit }
+            END { exit !found }
+          ' CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no '## [${VERSION}]' section. Update the heading from '## [Unreleased]' to '## [${VERSION}] - YYYY-MM-DD' before tagging."
             exit 1
           fi
@@ -92,8 +99,14 @@ jobs:
           # including) the next "## [" heading or EOF. The opening
           # heading itself is captured too, so the GitHub Release
           # body has the version heading for readability.
-          awk -v ver="${VERSION}" '
-            $0 ~ ("^## \\[" ver "\\]") { capture = 1; print; next }
+          #
+          # Uses `index($0, prefix) == 1` (literal substring at
+          # column 1) for the opening match so the dots in VERSION
+          # cannot match unintended characters. The closing pattern
+          # `/^## \[/` is a constant regex with no interpolation, so
+          # the same concern does not apply there.
+          awk -v prefix="## [${VERSION}]" '
+            index($0, prefix) == 1 { capture = 1; print; next }
             capture && /^## \[/ { exit }
             capture { print }
           ' CHANGELOG.md > release-notes.md
