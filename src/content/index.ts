@@ -104,6 +104,9 @@ function syncSidebar(): void {
     // from storage.
     cachedWorkflows = null;
     workflowsLoadFailed = false;
+    // Drop the scroll-restore cookie too — the next mount gets a
+    // fresh sidebar and there's no meaningful position to restore.
+    savedScrollBeforeCollapse = null;
     renderEpoch += 1;
     return;
   }
@@ -226,6 +229,18 @@ let cachedWorkflows: Workflow[] | null = null;
 // can show a distinct "cannot read workflow settings" state instead
 // of pretending the user has no workflows configured (SPEC §6.6).
 let workflowsLoadFailed = false;
+// Sidebar collapsed flag (#13). SPEC §6.4: the collapse state is
+// preserved across SPA navigations within the same tab but reset
+// on a full page reload, so we keep it as a module-scoped boolean
+// (which reloads with the page) rather than chrome.storage.local.
+// Default false → sidebar starts expanded.
+let sidebarCollapsed = false;
+// Captured scrollTop of the expanded root, set when the user
+// collapses. The next expand restores from this value so toggling
+// doesn't reset the user's scroll position (CSS overflow: hidden
+// + display: none on the inner sections would otherwise clamp
+// scrollTop to 0 while collapsed).
+let savedScrollBeforeCollapse: number | null = null;
 // Bumped on every renderSidebar call. Captured by the async
 // initializer so a late-arriving setup for an old video can't
 // overwrite the sidebarState that a newer SPA navigation already
@@ -238,6 +253,14 @@ async function renderSidebar(
 ): Promise<void> {
   if (shadow === null) return;
   const myEpoch = (renderEpoch += 1);
+  // A fresh mount means the previous root element is being thrown
+  // away (paintSidebar's shadow.replaceChildren()). Any scroll
+  // position the user had stashed via the collapse toggle was
+  // captured on the OLD root; restoring it onto the NEW root would
+  // mean "scrolled to byte N of the previous video's result list"
+  // — nonsensical. Reset so the next expand on this fresh sidebar
+  // starts at the top.
+  savedScrollBeforeCollapse = null;
   // Install a minimal sync sidebarState immediately so the
   // chrome.runtime.onMessage listener can sanity-check incoming
   // pushes (which arrive without waiting for loadWorkflows) — and
@@ -420,12 +443,82 @@ function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
 
   const root = document.createElement("div");
   root.className = "subflow-root";
+  if (sidebarCollapsed) root.classList.add("collapsed");
 
   const header = document.createElement("header");
   header.className = "subflow-header";
-  header.textContent = "Subflow";
+  // Title is always present in the DOM; in collapsed mode the CSS
+  // hides it via .subflow-root.collapsed .subflow-title so the panel
+  // narrows to just the toggle button. (Keeping the node lets us
+  // re-expand without a re-render burst.)
+  const title = document.createElement("span");
+  title.className = "subflow-title";
+  title.textContent = "Subflow";
+  header.appendChild(title);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "subflow-collapse-toggle";
+  toggle.setAttribute(
+    "aria-label",
+    sidebarCollapsed ? "Expand Subflow sidebar" : "Collapse Subflow sidebar",
+  );
+  toggle.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
+  // Visible glyph: a chevron pointing toward the expand direction
+  // (left when collapsed → "expand to the left"; right when
+  // expanded → "collapse to the right"). The aria-label carries
+  // the actual semantics for screen readers.
+  toggle.textContent = sidebarCollapsed ? "‹" : "›";
+  toggle.addEventListener("click", () => {
+    // Toggle WITHOUT re-painting from scratch — the sections under
+    // .subflow-root are static at this point (DOM order doesn't
+    // change with collapsed state, only CSS visibility), so the
+    // cheaper move is to flip the class on the root and update the
+    // toggle's own attributes. This preserves keyboard focus on the
+    // toggle (which the user just clicked).
+    //
+    // Capture the scroll position BEFORE collapsing so re-expanding
+    // lands the user back where they were. Without this, collapsing
+    // sets `overflow: hidden` + `display: none` on the sections,
+    // which causes the browser to clamp scrollTop to 0 — the
+    // captured value lets us restore it after re-expanding.
+    const wasCollapsed = sidebarCollapsed;
+    const savedScrollTop = wasCollapsed ? null : root.scrollTop;
+    sidebarCollapsed = !sidebarCollapsed;
+    root.classList.toggle("collapsed", sidebarCollapsed);
+    toggle.setAttribute(
+      "aria-label",
+      sidebarCollapsed ? "Expand Subflow sidebar" : "Collapse Subflow sidebar",
+    );
+    toggle.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
+    toggle.textContent = sidebarCollapsed ? "‹" : "›";
+    if (!sidebarCollapsed) {
+      // Re-expanding: restore the saved scrollTop on the NEXT frame
+      // so layout finishes settling. The capture above stored the
+      // pre-collapse value the previous time the user collapsed;
+      // we recover it via a module-scoped variable so consecutive
+      // toggle clicks (collapse → expand → collapse → expand) all
+      // round-trip.
+      const target = savedScrollBeforeCollapse;
+      if (target !== null) {
+        requestAnimationFrame(() => {
+          root.scrollTop = target;
+        });
+      }
+    } else if (savedScrollTop !== null) {
+      // Collapsing: stash the position so the next expand can
+      // restore. Cleared on full repaints (paintSidebar) since the
+      // root element is replaced — that's intentional, the user
+      // gets a fresh top-of-list view on the next mount.
+      savedScrollBeforeCollapse = savedScrollTop;
+    }
+  });
+  header.appendChild(toggle);
   root.appendChild(header);
 
+  // The rest of the sections are hidden via CSS when .collapsed is
+  // set on the root, but we still build the DOM so re-expanding is
+  // instantaneous (no re-fetch / re-compute).
   root.appendChild(renderSubtitleStatus(state));
   root.appendChild(renderWorkflowButtons(state, shadow));
   root.appendChild(renderResultList(state));
@@ -850,6 +943,20 @@ const SIDEBAR_CSS = `
     border: 1px solid #d1d5db;
     border-radius: 0.5rem;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    transition: width 0.2s ease;
+  }
+  .subflow-root.collapsed {
+    width: 40px;
+    padding: 0.25rem;
+    overflow: hidden;
+  }
+  .subflow-root.collapsed > section,
+  .subflow-root.collapsed .subflow-title {
+    display: none;
+  }
+  .subflow-root.collapsed .subflow-header {
+    margin-bottom: 0;
+    justify-content: center;
   }
   @media (prefers-color-scheme: dark) {
     .subflow-root {
@@ -866,10 +973,28 @@ const SIDEBAR_CSS = `
     color: inherit;
   }
   .subflow-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-weight: 700;
     font-size: 1em;
     margin-bottom: 0.75rem;
     color: #2563eb;
+  }
+  .subflow-collapse-toggle {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid #d1d5db;
+    border-radius: 0.25rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+  }
+  .subflow-collapse-toggle:hover {
+    background: rgba(127, 127, 127, 0.08);
   }
   .subflow-empty {
     margin: 0;
