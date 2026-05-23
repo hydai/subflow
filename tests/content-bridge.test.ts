@@ -23,6 +23,9 @@ const ALLOWED_CONTENT_TAGS = new Set([
   // Inbound to the content script (background pushes):
   "subflow:subtitle-result",
   "subflow:workflow-result",
+  // #17 — "Open settings" CTA relay (content can't call
+  // openOptionsPage directly).
+  "subflow:open-options-page",
 ]);
 
 // The matched-quote regex below intentionally catches `subflow:*`
