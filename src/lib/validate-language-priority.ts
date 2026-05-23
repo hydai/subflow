@@ -41,9 +41,12 @@ export interface LanguagePriorityValidationError {
   message: string;
 }
 
-// SPEC-required copy for the at-least-one rule. Lifted to a
-// module-level constant so the two emit sites — empty-list and
-// all-rows-blank — can't drift if the wording ever changes.
+// User-facing copy for the at-least-one rule. The exact wording
+// is suggested by issue #10's UX text ("至少需設定一個語言偏好"),
+// not by SPEC §7.4 (which specifies the RULE but not the EXACT
+// string). Lifted to a module-level constant so the two emit
+// sites — empty-list and all-rows-blank — can't drift if the
+// wording ever changes.
 const AT_LEAST_ONE_MESSAGE = "至少需設定一個語言偏好";
 
 export function validateLanguagePriority(

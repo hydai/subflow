@@ -302,10 +302,17 @@ function renderLanguageSection(): HTMLElement {
           errNode?.remove();
         }
         // The section-level banner — if present — also no longer
-        // describes the current input state, so drop it.
-        document
-          .querySelectorAll(".lang-prefs > .error")
-          .forEach((node) => node.remove());
+        // describes the current input state, so drop it. We've
+        // already removed each per-row error node via the loop
+        // above; the only `.error` left under `.lang-prefs` is the
+        // banner. (If a future change adds another error-bearing
+        // node here, narrow this selector to an id/class instead.)
+        const langPrefs = document.querySelector(".lang-prefs");
+        if (langPrefs !== null) {
+          for (const node of Array.from(langPrefs.children)) {
+            if (node.classList.contains("error")) node.remove();
+          }
+        }
       }
     });
     const rowError = state.languageRowErrors.find((e) => e.index === idx);
