@@ -757,16 +757,23 @@ function renderResultEntry(result: WorkflowResult): HTMLElement {
 function shouldOfferRetry(result: WorkflowResult): boolean {
   if (result.outcome === "success") return false;
   if (result.outcome === "aborted") return false;
-  if (
-    result.outcome === "http-error" &&
-    result.statusCode !== undefined &&
-    result.statusCode >= 400 &&
-    result.statusCode < 500
-  ) {
-    // 4xx is typically misconfiguration on the user's side
-    // (wrong URL, wrong auth headers). A retry without changing
-    // the configuration would just produce the same 4xx.
-    return false;
+  if (result.outcome === "http-error") {
+    // SPEC §6.6: Retry is for failures the user can plausibly
+    // recover from by re-running. 4xx is typically a user-config
+    // bug (wrong URL, wrong auth) — retrying without editing
+    // produces the same 4xx. 3xx is a redirect notice that fetch
+    // chose to surface as http-error (Response.ok === false for
+    // 3xx too); since fetch follows redirects by default, a
+    // surfaced 3xx means the endpoint is misconfigured in a way
+    // retries won't fix. ONLY 5xx server errors get the button.
+    if (
+      result.statusCode === undefined ||
+      result.statusCode < 500 ||
+      result.statusCode > 599
+    ) {
+      return false;
+    }
+    return true;
   }
   return true;
 }

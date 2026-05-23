@@ -53,25 +53,68 @@ interface InFlightRecord {
   startedAt: number;
 }
 
-async function recordInFlight(record: InFlightRecord): Promise<void> {
-  const current = await readInFlight();
-  current[record.requestId] = record;
-  await writeInFlight(current);
+// Serialise the read-modify-write of subflow.inFlightWorkflows
+// through a single Promise chain so concurrent dispatches can't
+// interleave their updates and lose entries. Each operation
+// (record OR clear) queues onto inFlightQueue; the runtime
+// processes them strictly in arrival order.
+let inFlightQueue: Promise<void> = Promise.resolve();
+
+function recordInFlight(record: InFlightRecord): Promise<void> {
+  return enqueueInFlightOp((current) => {
+    const next = { ...current };
+    next[record.requestId] = record;
+    return next;
+  });
 }
 
-async function clearInFlight(requestId: string): Promise<void> {
-  const current = await readInFlight();
-  if (current[requestId] === undefined) return;
-  delete current[requestId];
-  await writeInFlight(current);
+function clearInFlight(requestId: string): Promise<void> {
+  return enqueueInFlightOp((current) => {
+    if (current[requestId] === undefined) return current;
+    const next = { ...current };
+    delete next[requestId];
+    return next;
+  });
+}
+
+function enqueueInFlightOp(
+  fn: (current: Record<string, InFlightRecord>) => Record<string, InFlightRecord>,
+): Promise<void> {
+  const chained = inFlightQueue.then(async () => {
+    const current = await readInFlight();
+    const next = fn(current);
+    if (next !== current) await writeInFlight(next);
+  });
+  inFlightQueue = chained.catch(() => {
+    /* Swallow individual op failures so the queue doesn't deadlock;
+       a downstream replay will still notice abandoned records. */
+  });
+  return chained;
 }
 
 async function readInFlight(): Promise<Record<string, InFlightRecord>> {
   return new Promise((resolve) => {
     try {
       chrome.storage.local.get([IN_FLIGHT_STORAGE_KEY], (items) => {
+        // chrome.storage callbacks report failures via
+        // chrome.runtime.lastError, not throws. Treat any error
+        // as "no readable state" and fall back to empty so the
+        // queue keeps progressing.
+        const last = chrome.runtime.lastError;
+        if (last !== undefined && last !== null) {
+          resolve({});
+          return;
+        }
         const raw = items?.[IN_FLIGHT_STORAGE_KEY];
-        if (raw === null || typeof raw !== "object") {
+        // Storage could have been hand-edited or saved by an older
+        // schema; accept ONLY plain objects, reject null / arrays /
+        // other types so Object.values(...) can't produce surprises.
+        if (
+          raw === null ||
+          raw === undefined ||
+          typeof raw !== "object" ||
+          Array.isArray(raw)
+        ) {
           resolve({});
           return;
         }
@@ -89,6 +132,10 @@ async function writeInFlight(
   return new Promise((resolve) => {
     try {
       chrome.storage.local.set({ [IN_FLIGHT_STORAGE_KEY]: records }, () => {
+        // Same as readInFlight: surface lastError-shaped failures
+        // by simply resolving (the queue keeps moving; the next
+        // replay will catch any abandoned records).
+        void chrome.runtime.lastError;
         resolve();
       });
     } catch {
@@ -509,9 +556,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
         }
         // Record the in-flight workflow so a service-worker
         // termination mid-fetch can be surfaced to the sidebar on
-        // the next wake (see replayInterruptedWorkflows). Skip for
-        // autoRun dedup-hit paths because runAutoRun resolves to
-        // null synchronously without actually firing a request.
+        // the next wake (see replayInterruptedWorkflows). Queue
+        // the record BEFORE dispatching so a fast resolution
+        // (notably an autoRun dedup hit that resolves on the next
+        // microtask) can't clear before the record exists. Both
+        // operations route through the serialised in-flight queue.
         const inFlightRecord: InFlightRecord = {
           tabId,
           videoId: message.videoId,
@@ -520,7 +569,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           workflowName: message.workflow.name,
           startedAt: Date.now(),
         };
-        void recordInFlight(inFlightRecord);
+        const recordingPromise = recordInFlight(inFlightRecord);
         const dispatch =
           message.trigger === "auto"
             ? orchestrator.runAutoRun(
@@ -530,6 +579,8 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
                 realVariables,
               )
             : orchestrator.runManual(tabId, message.workflow, realVariables);
+        // Ensure the record write completes before any clear; await
+        // it inside each resolution branch via recordingPromise.
         dispatch
           .then((result) => {
             // autoRun dedup: a null result means "this (tabId,
@@ -540,11 +591,12 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             if (result === null) {
               // Dedup hit — no actual request was issued, so the
               // in-flight record needs to come back off the
-              // storage scratchpad. Without this, the residual
-              // would replay as "background interrupted" on the
-              // NEXT worker startup even though nothing was
-              // actually in flight.
-              void clearInFlight(message.requestId);
+              // storage scratchpad. The recordingPromise await
+              // ensures the original record landed before the
+              // clear so the two operations can't reorder.
+              void recordingPromise.then(() =>
+                clearInFlight(message.requestId),
+              );
               sendResponse({
                 videoId: message.videoId,
                 requestId: message.requestId,
@@ -553,7 +605,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
               });
               return;
             }
-            void clearInFlight(message.requestId);
+            void recordingPromise.then(() => clearInFlight(message.requestId));
             // SPEC §6.7: aborted requests do not produce sidebar
             // entries.
             sendResponse({
@@ -564,7 +616,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             });
           })
           .catch((err: unknown) => {
-            void clearInFlight(message.requestId);
+            void recordingPromise.then(() => clearInFlight(message.requestId));
             sendResponse({
               videoId: message.videoId,
               requestId: message.requestId,
