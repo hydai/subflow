@@ -274,6 +274,27 @@ function renderLanguageSection(): HTMLElement {
     }) as HTMLInputElement;
     input.addEventListener("input", () => {
       state.languagePriority[idx] = input.value;
+      // The validation snapshot reflects the last save attempt. As
+      // soon as the user starts typing in any row, the stored
+      // row-error indices and the section banner stop describing
+      // reality (the user is in the middle of fixing them). Clear
+      // both immediately so stale red highlighting / messages don't
+      // linger between keystrokes and the next save click. The
+      // listener doesn't re-render so the user's caret position is
+      // preserved while typing.
+      if (
+        state.languageRowErrors.length > 0 ||
+        state.languageError !== null
+      ) {
+        clearLanguageValidationState();
+        // Remove the stale row-level visual state from THIS input
+        // without a full re-render (which would blow away the
+        // caret). The other rows' stale highlighting persists
+        // until the next render(), which is fine — any subsequent
+        // structural edit OR a successful save will repaint.
+        input.removeAttribute("aria-invalid");
+        input.removeAttribute("aria-describedby");
+      }
     });
     const rowError = state.languageRowErrors.find((e) => e.index === idx);
     if (rowError !== undefined) {
