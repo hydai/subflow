@@ -226,6 +226,12 @@ let cachedWorkflows: Workflow[] | null = null;
 // can show a distinct "cannot read workflow settings" state instead
 // of pretending the user has no workflows configured (SPEC §6.6).
 let workflowsLoadFailed = false;
+// Sidebar collapsed flag (#13). SPEC §6.4: the collapse state is
+// preserved across SPA navigations within the same tab but reset
+// on a full page reload, so we keep it as a module-scoped boolean
+// (which reloads with the page) rather than chrome.storage.local.
+// Default false → sidebar starts expanded.
+let sidebarCollapsed = false;
 // Bumped on every renderSidebar call. Captured by the async
 // initializer so a late-arriving setup for an old video can't
 // overwrite the sidebarState that a newer SPA navigation already
@@ -420,12 +426,41 @@ function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
 
   const root = document.createElement("div");
   root.className = "subflow-root";
+  if (sidebarCollapsed) root.classList.add("collapsed");
 
   const header = document.createElement("header");
   header.className = "subflow-header";
-  header.textContent = "Subflow";
+  // Title is always shown; in collapsed mode the CSS hides it via
+  // .subflow-root.collapsed .subflow-title so the panel narrows to
+  // just the toggle button.
+  const title = document.createElement("span");
+  title.className = "subflow-title";
+  title.textContent = "Subflow";
+  header.appendChild(title);
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "subflow-collapse-toggle";
+  toggle.setAttribute(
+    "aria-label",
+    sidebarCollapsed ? "Expand Subflow sidebar" : "Collapse Subflow sidebar",
+  );
+  toggle.setAttribute("aria-expanded", sidebarCollapsed ? "false" : "true");
+  // Visible glyph: a chevron pointing toward the expand direction
+  // (left when collapsed → "expand to the left"; right when
+  // expanded → "collapse to the right"). The aria-label carries
+  // the actual semantics for screen readers.
+  toggle.textContent = sidebarCollapsed ? "‹" : "›";
+  toggle.addEventListener("click", () => {
+    sidebarCollapsed = !sidebarCollapsed;
+    paintSidebar(shadow, state);
+  });
+  header.appendChild(toggle);
   root.appendChild(header);
 
+  // The rest of the sections are hidden via CSS when .collapsed is
+  // set on the root, but we still build the DOM so re-expanding is
+  // instantaneous (no re-fetch / re-compute).
   root.appendChild(renderSubtitleStatus(state));
   root.appendChild(renderWorkflowButtons(state, shadow));
   root.appendChild(renderResultList(state));
@@ -850,6 +885,20 @@ const SIDEBAR_CSS = `
     border: 1px solid #d1d5db;
     border-radius: 0.5rem;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+    transition: width 0.2s ease;
+  }
+  .subflow-root.collapsed {
+    width: 40px;
+    padding: 0.25rem;
+    overflow: hidden;
+  }
+  .subflow-root.collapsed > section,
+  .subflow-root.collapsed .subflow-title {
+    display: none;
+  }
+  .subflow-root.collapsed .subflow-header {
+    margin-bottom: 0;
+    justify-content: center;
   }
   @media (prefers-color-scheme: dark) {
     .subflow-root {
@@ -866,10 +915,28 @@ const SIDEBAR_CSS = `
     color: inherit;
   }
   .subflow-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     font-weight: 700;
     font-size: 1em;
     margin-bottom: 0.75rem;
     color: #2563eb;
+  }
+  .subflow-collapse-toggle {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid #d1d5db;
+    border-radius: 0.25rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    line-height: 1;
+    padding: 0;
+    cursor: pointer;
+  }
+  .subflow-collapse-toggle:hover {
+    background: rgba(127, 127, 127, 0.08);
   }
   .subflow-empty {
     margin: 0;
