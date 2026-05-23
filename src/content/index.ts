@@ -83,13 +83,18 @@ function syncSidebar(): void {
     // video-changed. Drop sidebarState too so the workflows array,
     // result list, and cached subtitle stop occupying memory for
     // the (possibly long-lived) period the user is browsing
-    // non-watch pages.
+    // non-watch pages. Bump renderEpoch so any in-flight
+    // renderSidebar awaits return early — their captured shadow
+    // ref is now detached and painting into it would leak memory
+    // and (worse) cause request-subtitle to fire for a no-longer-
+    // displayed video.
     if (sidebarRoot !== null) {
       sidebarRoot.remove();
       sidebarRoot = null;
       sidebarShadow = null;
     }
     sidebarState = null;
+    renderEpoch += 1;
     return;
   }
 
@@ -172,7 +177,14 @@ function createSidebarRoot(): SidebarRoot {
 // videoId change so we keep the state object alive at module scope
 // and re-paint into the same shadow root rather than wiping the
 // tree on every result.
-interface SidebarState {
+//
+// Named SidebarUiState here to avoid colliding with the
+// `SidebarState` exported from src/lib/types.ts, which is the
+// messaging-shape used to broadcast sidebar state across the
+// background / content boundary. That shape is a subset of this
+// one (subtitle status + collapsed + results), without workflows
+// or the videoId scope that the renderer needs.
+interface SidebarUiState {
   // Workflows loaded from chrome.storage.local at first mount. SPEC
   // §6.8 says options-page edits do NOT push live; new workflows
   // appear on the next watch-page visit. We honour that by reading
@@ -188,7 +200,7 @@ interface SidebarState {
   videoId: string;
 }
 
-let sidebarState: SidebarState | null = null;
+let sidebarState: SidebarUiState | null = null;
 // Bumped on every renderSidebar call. Captured by the async
 // initializer so a late-arriving setup for an old video can't
 // overwrite the sidebarState that a newer SPA navigation already
@@ -318,7 +330,7 @@ async function loadWorkflows(): Promise<Workflow[]> {
   });
 }
 
-function paintSidebar(shadow: ShadowRoot, state: SidebarState): void {
+function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
   shadow.replaceChildren();
   const style = document.createElement("style");
   style.textContent = SIDEBAR_CSS;
@@ -340,7 +352,7 @@ function paintSidebar(shadow: ShadowRoot, state: SidebarState): void {
   shadow.appendChild(root);
 }
 
-function renderSubtitleStatus(state: SidebarState): HTMLElement {
+function renderSubtitleStatus(state: SidebarUiState): HTMLElement {
   const section = document.createElement("section");
   section.className = "subflow-status";
   const heading = document.createElement("h3");
@@ -372,7 +384,7 @@ function subtitleErrorMessage(result: SubtitleResult): string {
 }
 
 function renderWorkflowButtons(
-  state: SidebarState,
+  state: SidebarUiState,
   shadow: ShadowRoot,
 ): HTMLElement {
   const section = document.createElement("section");
@@ -410,7 +422,7 @@ function renderWorkflowButtons(
   return section;
 }
 
-function renderResultList(state: SidebarState): HTMLElement {
+function renderResultList(state: SidebarUiState): HTMLElement {
   const section = document.createElement("section");
   section.className = "subflow-results";
   const heading = document.createElement("h3");
@@ -490,7 +502,7 @@ function formatTime(date: Date): string {
   return `${hh}:${mm}`;
 }
 
-function renderRefreshButton(state: SidebarState): HTMLElement {
+function renderRefreshButton(state: SidebarUiState): HTMLElement {
   const wrap = document.createElement("section");
   wrap.className = "subflow-refresh";
   const button = document.createElement("button");
