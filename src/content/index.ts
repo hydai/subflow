@@ -810,7 +810,11 @@ function formatOutcomeLabel(result: WorkflowResult): string {
       // status code without falsely calling it a client error.
       return `HTTP ${result.statusCode}`;
     case "timeout":
-      return "Timed out after 60 seconds";
+      // Don't hard-code the timeout duration here; the runner's
+      // result body already carries the canonical phrasing
+      // ("Request timed out after Ns") so the UI stays in sync with
+      // WORKFLOW_TIMEOUT_MS even if it changes.
+      return "Timed out";
     case "aborted":
       return "Aborted";
     case "network-error":

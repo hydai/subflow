@@ -27,9 +27,9 @@ const orchestrator = new WorkflowOrchestrator();
 // detection works in two layers:
 //
 //   1. Every workflow execution is logged to chrome.storage.local
-//      under `inFlightWorkflows` with the request envelope. When
-//      the runner resolves (success OR failure), the entry is
-//      removed.
+//      under \`subflow.inFlightWorkflows\` (the IN_FLIGHT_STORAGE_KEY
+//      constant below) with the request envelope. When the runner
+//      resolves (success OR failure), the entry is removed.
 //   2. On service-worker startup, we read that key. Any residual
 //      entries belonged to a previous worker that was terminated
 //      mid-flight; we synthesise a network-error result with an
@@ -579,19 +579,23 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           workflowName: message.workflow.name,
           startedAt: Date.now(),
         };
+        // Record write must land BEFORE dispatching so a worker
+        // terminated mid-fetch always leaves a recoverable trail.
+        // Chain dispatch off the record-landing promise via .then
+        // rather than awaiting (the router callback is sync — we
+        // return true below to keep the message channel open).
         const recordingPromise = recordInFlight(inFlightRecord);
-        const dispatch =
-          message.trigger === "auto"
-            ? orchestrator.runAutoRun(
-                tabId,
-                message.videoId,
-                message.workflow,
-                realVariables,
-              )
-            : orchestrator.runManual(tabId, message.workflow, realVariables);
-        // Ensure the record write completes before any clear; await
-        // it inside each resolution branch via recordingPromise.
-        dispatch
+        recordingPromise
+          .then(() => {
+            return message.trigger === "auto"
+              ? orchestrator.runAutoRun(
+                  tabId,
+                  message.videoId,
+                  message.workflow,
+                  realVariables,
+                )
+              : orchestrator.runManual(tabId, message.workflow, realVariables);
+          })
           .then(async (result) => {
             // autoRun dedup: a null result means "this (tabId,
             // videoId, workflowId) has already fired in this tab".
