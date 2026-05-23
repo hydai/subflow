@@ -175,13 +175,25 @@ void replayInterruptedWorkflows().catch(() => {
 function isInFlightRecord(value: unknown): value is InFlightRecord {
   if (value === null || typeof value !== "object") return false;
   const r = value as Record<string, unknown>;
+  // tabId must be a non-negative integer (chrome.tabs ids are
+  // positive ints) and startedAt a finite number — guard against
+  // NaN / Infinity / non-int values that pass typeof but blow up
+  // when handed to chrome.tabs.sendMessage / new Date().
+  if (
+    typeof r.tabId !== "number" ||
+    !Number.isInteger(r.tabId) ||
+    r.tabId < 0
+  ) {
+    return false;
+  }
+  if (typeof r.startedAt !== "number" || !Number.isFinite(r.startedAt)) {
+    return false;
+  }
   return (
-    typeof r.tabId === "number" &&
     typeof r.videoId === "string" &&
     typeof r.requestId === "string" &&
     typeof r.workflowId === "string" &&
-    typeof r.workflowName === "string" &&
-    typeof r.startedAt === "number"
+    typeof r.workflowName === "string"
   );
 }
 
@@ -197,12 +209,14 @@ async function replayInterruptedWorkflows(): Promise<void> {
   let entries: InFlightRecord[] = [];
   await enqueueInFlightOp((current) => {
     entries = Object.values(current).filter(isInFlightRecord);
-    // Only return a new (empty) object when there's actually work
-    // to do; otherwise return `current` so enqueueInFlightOp's
-    // reference-equality check skips the storage write. Saves an
-    // unnecessary chrome.storage.local.set on every clean
-    // service-worker start.
-    if (entries.length === 0) return current;
+    // Write only when the scratchpad isn't ALREADY clean. The
+    // current map is clean if it has no keys, OR it has keys but
+    // every one of them is a valid InFlightRecord that we're
+    // about to drain. If any key is malformed, write an empty
+    // object so the garbage is purged even when we have nothing
+    // valid to replay.
+    const allKeysCount = Object.keys(current).length;
+    if (allKeysCount === 0) return current;
     return {};
   });
   if (entries.length === 0) return;
