@@ -242,6 +242,9 @@ export class SubtitleService {
     for (const key of state.inFlight.keys()) {
       if (key.startsWith(prefix)) state.inFlight.delete(key);
     }
+    // Drop the recent-key pointer for THIS video too — the next
+    // getSubtitle will rebuild it on success.
+    state.recentCacheKey.delete(videoId);
     state.epoch += 1;
   }
 
@@ -283,6 +286,12 @@ export class SubtitleService {
     }
     for (const key of state.inFlight.keys()) {
       if (!key.startsWith(prefix)) state.inFlight.delete(key);
+    }
+    // Prune recentCacheKey pointers for videos we no longer cache.
+    // Without this, the Map grows by one entry per SPA navigation
+    // for the lifetime of the tab.
+    for (const videoId of state.recentCacheKey.keys()) {
+      if (videoId !== newVideoId) state.recentCacheKey.delete(videoId);
     }
     state.epoch += 1;
   }

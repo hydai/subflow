@@ -597,11 +597,37 @@ interface WorkflowResponse {
 function isWorkflowResponse(value: unknown): value is WorkflowResponse {
   if (value === null || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;
+  if (typeof v.videoId !== "string") return false;
+  if (typeof v.requestId !== "string") return false;
+  if (v.result === null) return true;
+  if (v.result === undefined || typeof v.result !== "object") return false;
+  const r = v.result as Record<string, unknown>;
   return (
-    typeof v.videoId === "string" &&
-    typeof v.requestId === "string" &&
-    (v.result === null || (typeof v.result === "object" && v.result !== null))
+    typeof r.workflowId === "string" &&
+    typeof r.workflowName === "string" &&
+    typeof r.outcome === "string" &&
+    typeof r.body === "string" &&
+    typeof r.timestamp === "number"
   );
+}
+
+function isSubtitleResultLike(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.status !== "string") return false;
+  // Either ok with transcript fields, or one of the known failure
+  // statuses with an optional message.
+  if (v.status === "ok") {
+    return (
+      typeof v.transcript === "string" &&
+      typeof v.transcriptWithTimestamps === "string" &&
+      typeof v.language === "string"
+    );
+  }
+  // Failure: status is some known non-ok variant; message is
+  // optional but if present must be a string.
+  if (v.message !== undefined && typeof v.message !== "string") return false;
+  return true;
 }
 
 function handleWorkflowResponse(
@@ -627,6 +653,7 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
   if (msg.type === "subflow:subtitle-result") {
     const m = message as { videoId?: unknown; result?: unknown };
     if (m.videoId !== sidebarState.videoId) return undefined;
+    if (!isSubtitleResultLike(m.result)) return undefined;
     sidebarState.subtitle = m.result as SubtitleResult;
     paintSidebar(sidebarShadow, sidebarState);
   } else if (msg.type === "subflow:workflow-result") {
