@@ -259,11 +259,18 @@ function renderLanguageSection(): HTMLElement {
     input.addEventListener("input", () => {
       state.languagePriority[idx] = input.value;
     });
-    const up = iconButton("↑", `Move language ${idx + 1} up`, () =>
-      moveLang(idx, idx - 1),
+    const total = state.languagePriority.length;
+    const up = iconButton(
+      "↑",
+      `Move language ${idx + 1} up`,
+      () => moveLang(idx, idx - 1),
+      { disabled: idx === 0 },
     );
-    const down = iconButton("↓", `Move language ${idx + 1} down`, () =>
-      moveLang(idx, idx + 1),
+    const down = iconButton(
+      "↓",
+      `Move language ${idx + 1} down`,
+      () => moveLang(idx, idx + 1),
+      { disabled: idx === total - 1 },
     );
     // Disambiguate the visible "Remove" buttons for screen readers
     // — they all share the same visible text but appear in a
@@ -381,11 +388,25 @@ function renderWorkflowRow(w: Workflow, _idx: number): HTMLElement {
   }
   const urlDiv = el("div", { class: "url" }, w.url);
   meta.append(nameSpan, urlDiv);
-  const up = iconButton("↑", `Move workflow "${w.name}" up`, () =>
-    moveWorkflow(w, "up"),
+  // Source the boundary state from the pending list so reorder
+  // buttons reflect the latest intent (matching what moveWorkflow
+  // actually operates on), not the still-committed render input.
+  const visible = latestPending() ?? state.workflows;
+  const visibleIdx = visible.findIndex((x) => x.id === w.id);
+  const total = visible.length;
+  const isFirst = visibleIdx <= 0;
+  const isLast = visibleIdx === -1 || visibleIdx === total - 1;
+  const up = iconButton(
+    "↑",
+    `Move workflow "${w.name}" up`,
+    () => moveWorkflow(w, "up"),
+    { disabled: isFirst },
   );
-  const down = iconButton("↓", `Move workflow "${w.name}" down`, () =>
-    moveWorkflow(w, "down"),
+  const down = iconButton(
+    "↓",
+    `Move workflow "${w.name}" down`,
+    () => moveWorkflow(w, "down"),
+    { disabled: isLast },
   );
   const edit = button("Edit", () => startEdit(w));
   const del = button("Delete", () => deleteWorkflow(w), "danger");
@@ -602,15 +623,28 @@ function collapseHeaders(rows: HeaderRow[]): Record<string, string> {
 function renderHeadersField(rows: HeaderRow[]): HTMLElement {
   // Headers is a multi-row group, not a single input — there's no
   // sensible target for a <label for=…>. Use the group-labelling
-  // pattern instead: a <h3>-style label gets an id, the wrapper
-  // becomes role="group" + aria-labelledby. Screen readers announce
-  // "Headers, group" when focus enters any row's input.
+  // pattern instead: a styled <span> heading gets an id and the
+  // wrapper becomes role="group" + aria-labelledby. The HTML <label>
+  // element is reserved for actual form-control association, so
+  // using it as a group title would be invalid markup.
   const wrap = el("div", {
     class: "field",
     role: "group",
     "aria-labelledby": "headers-label",
   });
-  wrap.appendChild(el("label", { id: "headers-label" }, "Headers"));
+  // role+aria-level expose the heading semantics to assistive tech
+  // without forcing visual sizing (CSS targets `.field > .group-title`).
+  const heading = el(
+    "span",
+    {
+      id: "headers-label",
+      class: "group-title",
+      role: "heading",
+      "aria-level": "3",
+    },
+    "Headers",
+  );
+  wrap.appendChild(heading);
   wrap.appendChild(
     el(
       "p",
@@ -782,14 +816,22 @@ function button(
 
 // Icon-only button (e.g. up/down arrows). The visible glyph is
 // ambiguous on its own, so screen readers get a real description
-// via aria-label.
+// via aria-label. The `disabled` option drops the button into the
+// native disabled state, which:
+//   - communicates unavailability via the native ARIA mapping
+//   - blocks pointer / keyboard / screen-reader activation
+// at one stroke, so we don't need to also set aria-disabled.
 function iconButton(
   glyph: string,
   ariaLabel: string,
   onClick: () => void | Promise<void>,
+  options: { disabled?: boolean } = {},
 ): HTMLElement {
   const b = el("button", { type: "button", "aria-label": ariaLabel });
   b.textContent = glyph;
+  if (options.disabled === true) {
+    (b as HTMLButtonElement).disabled = true;
+  }
   b.addEventListener("click", () => {
     void onClick();
   });

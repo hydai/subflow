@@ -57,7 +57,8 @@ section {
   margin-bottom: 1.5rem;
 }
 
-label {
+label,
+.group-title {
   display: block;
   font-weight: 500;
   margin-bottom: var(--field-gap);
