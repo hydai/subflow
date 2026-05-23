@@ -220,26 +220,32 @@ async function replayInterruptedWorkflows(): Promise<void> {
     return {};
   });
   if (entries.length === 0) return;
-  for (const record of entries) {
-    try {
-      await chrome.tabs.sendMessage(record.tabId, {
-        type: "subflow:workflow-result",
-        videoId: record.videoId,
-        requestId: record.requestId,
-        result: {
-          workflowId: record.workflowId,
-          workflowName: record.workflowName,
-          outcome: "network-error",
-          body:
-            "Background service was interrupted while this workflow was running. Click Retry to start over.",
-          timestamp: Date.now(),
-        },
-        suppressed: false,
-      });
-    } catch {
-      // Tab may have closed in the meantime; nothing to surface.
-    }
-  }
+  // Push the interrupted-result message to each originating tab in
+  // parallel. Sequencing was unnecessary — these are independent
+  // tab.sendMessage calls — and the await-in-loop pattern would
+  // keep the worker alive longer than the replay actually needs.
+  await Promise.all(
+    entries.map(async (record) => {
+      try {
+        await chrome.tabs.sendMessage(record.tabId, {
+          type: "subflow:workflow-result",
+          videoId: record.videoId,
+          requestId: record.requestId,
+          result: {
+            workflowId: record.workflowId,
+            workflowName: record.workflowName,
+            outcome: "network-error",
+            body:
+              "Background service was interrupted while this workflow was running. Click Retry to start over.",
+            timestamp: Date.now(),
+          },
+          suppressed: false,
+        });
+      } catch {
+        // Tab may have closed in the meantime; nothing to surface.
+      }
+    }),
+  );
 }
 
 chrome.action.onClicked.addListener(() => {

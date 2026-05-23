@@ -826,6 +826,17 @@ function formatOutcomeLabel(result: WorkflowResult): string {
     case "aborted":
       return "Aborted";
     case "network-error":
+      // SPEC §6.6 distinguishes the "background service interrupted"
+      // case from a generic network failure. The replay path uses
+      // outcome:"network-error" with a body that begins with
+      // "Background service was interrupted" (kept in sync with
+      // replayInterruptedWorkflows in src/background/index.ts).
+      // Surface the distinction in the label so the user sees
+      // "Background service interrupted" instead of the generic
+      // "Workflow request failed".
+      if (result.body.startsWith("Background service was interrupted")) {
+        return "Background service interrupted";
+      }
       return "Workflow request failed";
     case "precondition-failed":
       return "Waiting for subtitle";
