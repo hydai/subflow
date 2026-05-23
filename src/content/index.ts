@@ -211,6 +211,22 @@ interface SidebarUiState {
   subtitle: SubtitleResult | null;
   // Newest first, capped at 5 (SPEC §6.4 result list).
   results: WorkflowResult[];
+  // Request IDs we've already rendered a result for. Used to
+  // dedupe a service-worker-termination scenario: triggerWorkflow's
+  // catch handler can synthesise a local network-error if
+  // sendMessage rejects, AND the background's
+  // replayInterruptedWorkflows can later push an "interrupted"
+  // result for the SAME requestId. Without dedup, the sidebar
+  // would show both. We keep the first one that landed (whichever
+  // got to handleWorkflowResponse first) and drop subsequent
+  // duplicates.
+  seenRequestIds: Set<string>;
+  // Pointer from requestId → index in `results`. Lets the dedup
+  // "upgrade" path (network-error → interrupted) target the right
+  // row even when the same workflow has been retried and there
+  // are multiple matching outcomes. The Map is kept consistent
+  // with `results` by addResult's caller below.
+  resultIndexByRequestId: Map<string, number>;
   // videoId scope for the current sidebar instance. Reset on every
   // SPA navigation.
   videoId: string;
@@ -270,6 +286,8 @@ async function renderSidebar(
     workflows: [],
     subtitle: null,
     results: [],
+    seenRequestIds: new Set(),
+    resultIndexByRequestId: new Map(),
     videoId,
   };
   paintSidebar(shadow, sidebarState);
@@ -288,6 +306,8 @@ async function renderSidebar(
       workflows,
       subtitle: null,
       results: [],
+      seenRequestIds: new Set(),
+      resultIndexByRequestId: new Map(),
       videoId,
     };
   }
@@ -735,7 +755,84 @@ function renderResultEntry(result: WorkflowResult): HTMLElement {
   body.textContent = truncateBody(result);
   item.appendChild(body);
 
+  // SPEC §6.6 #18: Retry button appears for outcomes the user can
+  // reasonably want to retry — 5xx, timeout, network-error,
+  // precondition-failed, and "interrupted" (dedicated outcome
+  // produced by replayInterruptedWorkflows on service-worker
+  // wake). NOT 4xx (user-config error) and NOT aborted (suppressed
+  // by the response handler anyway).
+  if (shouldOfferRetry(result)) {
+    const retryButton = ctaButton("Retry", () => {
+      void retryWorkflow(result.workflowId);
+    }) as HTMLButtonElement;
+    // Mirror the main workflow button's gating: Retry is a no-op
+    // when the subtitle isn't ready, so disable it visually
+    // instead of leaving a clickable control that silently does
+    // nothing.
+    if (sidebarState !== null) {
+      const subtitleReady =
+        sidebarState.subtitle !== null &&
+        sidebarState.subtitle.status === "ok";
+      if (!subtitleReady) {
+        retryButton.disabled = true;
+        retryButton.title = "Waiting for subtitle to load.";
+      }
+    }
+    item.appendChild(retryButton);
+  }
+
   return item;
+}
+
+function shouldOfferRetry(result: WorkflowResult): boolean {
+  if (result.outcome === "success") return false;
+  if (result.outcome === "aborted") return false;
+  if (result.outcome === "http-error") {
+    // SPEC §6.6: Retry is for failures the user can plausibly
+    // recover from by re-running. 4xx is typically a user-config
+    // bug (wrong URL, wrong auth) — retrying without editing
+    // produces the same 4xx. 3xx is a redirect notice that fetch
+    // chose to surface as http-error (Response.ok === false for
+    // 3xx too); since fetch follows redirects by default, a
+    // surfaced 3xx means the endpoint is misconfigured in a way
+    // retries won't fix. ONLY 5xx server errors get the button.
+    if (
+      result.statusCode === undefined ||
+      result.statusCode < 500 ||
+      result.statusCode > 599
+    ) {
+      return false;
+    }
+    return true;
+  }
+  return true;
+}
+
+async function retryWorkflow(workflowId: string): Promise<void> {
+  if (sidebarState === null || sidebarShadow === null) return;
+  // Defence-in-depth: the renderResultEntry path also disables the
+  // Retry button when subtitles aren't ready, but the disabled
+  // state reflects the snapshot at the LAST paint. If the user
+  // somehow clicks during a partial repaint or if the gate's ever
+  // bypassed, this no-op stops a retry from queuing up another
+  // precondition-failed.
+  if (sidebarState.subtitle === null || sidebarState.subtitle.status !== "ok") {
+    return;
+  }
+  // Look up the workflow from the cached list (read once per
+  // watch-page mount per SPEC §6.8 — no live subscription to
+  // options-page edits, so the lookup matches whatever was
+  // active when this tab loaded). The find can still miss if a
+  // workflow was deleted in the same options-page session AND
+  // somehow shows up here — defence in depth.
+  const workflow = sidebarState.workflows.find((w) => w.id === workflowId);
+  if (workflow === undefined) {
+    // No workflow with that id in the current mount — silently
+    // no-op; the failure result stays in the list as a record
+    // that the attempt was made.
+    return;
+  }
+  await triggerWorkflow(workflow, sidebarShadow);
 }
 
 function formatOutcomeLabel(result: WorkflowResult): string {
@@ -743,15 +840,36 @@ function formatOutcomeLabel(result: WorkflowResult): string {
     case "success":
       return `Success (HTTP ${result.statusCode})`;
     case "http-error":
+      if (result.statusCode === undefined) return "HTTP error";
+      if (result.statusCode >= 500 && result.statusCode <= 599) {
+        return `Server error (HTTP ${result.statusCode})`;
+      }
+      if (result.statusCode >= 400 && result.statusCode <= 499) {
+        return `Client error (HTTP ${result.statusCode})`;
+      }
+      // 3xx (Response.ok is also false for these) — surface the
+      // status code without falsely calling it a client error.
       return `HTTP ${result.statusCode}`;
-    case "timeout":
-      return "Timed out";
+    case "timeout": {
+      // Surface the duration so the user knows WHY it gave up. The
+      // body field carries the canonical "Request timed out after
+      // Ns" string from the runner, so we forward whatever number
+      // appears there rather than hard-coding 60. If the body
+      // doesn't match the expected pattern, fall back to a plain
+      // label. Pluralisation: "1 second" vs "N seconds".
+      const m = result.body.match(/after\s+(\d+(?:\.\d+)?)\s*s/i);
+      if (m === null) return "Timed out";
+      const seconds = m[1];
+      return `Timed out after ${seconds} ${seconds === "1" ? "second" : "seconds"}`;
+    }
     case "aborted":
       return "Aborted";
     case "network-error":
-      return "Network error";
+      return "Workflow request failed";
     case "precondition-failed":
       return "Waiting for subtitle";
+    case "interrupted":
+      return "Background service interrupted";
   }
 }
 
@@ -896,6 +1014,7 @@ const VALID_WORKFLOW_OUTCOMES = new Set([
   "timeout",
   "aborted",
   "precondition-failed",
+  "interrupted",
 ]);
 
 function isWorkflowResponse(value: unknown): value is WorkflowResponse {
@@ -954,6 +1073,12 @@ function isSubtitleResultLike(value: unknown): boolean {
   return true;
 }
 
+// Cap on the dedupe Set so it can't grow without bound during a
+// long watch-page session. We keep ~3x the result list capacity
+// (15) so a recently-evicted result's requestId still blocks a
+// late-arriving duplicate, but the Set's footprint stays small.
+const SEEN_REQUEST_IDS_CAP = 15;
+
 function handleWorkflowResponse(
   response: WorkflowResponse,
   shadow: ShadowRoot,
@@ -962,8 +1087,76 @@ function handleWorkflowResponse(
   if (response.videoId !== sidebarState.videoId) return;
   if (response.suppressed === true) return;
   if (response.result === null) return;
+  // Dedup by requestId so a single logical request that produces
+  // two responses (e.g. service-worker termination: triggerWorkflow's
+  // catch emits a local network-error first, then
+  // replayInterruptedWorkflows pushes outcome:"interrupted" later
+  // for the same requestId) lands at most once in the list. We
+  // prefer the more SPECIFIC outcome — if a previous local guess
+  // already rendered as "network-error" and a more accurate
+  // "interrupted" replay arrives later, swap the entry in place.
+  if (sidebarState.seenRequestIds.has(response.requestId)) {
+    if (response.result.outcome === "interrupted") {
+      // Try to upgrade the existing row in place; resultIndexByRequestId
+      // tracks each requestId's current position in the results
+      // array. If the upgrade target was already evicted from the
+      // 5-row cap (its requestId is in seenRequestIds but the
+      // index map no longer has an entry), we fall through to
+      // re-add the "interrupted" result as a fresh row — the user
+      // wouldn't see the upgrade otherwise.
+      const idx = sidebarState.resultIndexByRequestId.get(response.requestId);
+      if (idx !== undefined && sidebarState.results[idx] !== undefined) {
+        const next = [...sidebarState.results];
+        next[idx] = response.result;
+        sidebarState.results = next;
+        paintSidebar(shadow, sidebarState);
+        return;
+      }
+      // Fall through: existing entry was evicted. Drop the
+      // requestId from seenRequestIds so the addResult flow
+      // below re-adds it as a fresh row.
+      sidebarState.seenRequestIds.delete(response.requestId);
+    } else {
+      // Non-upgrade dup: drop silently.
+      return;
+    }
+  }
+  sidebarState.seenRequestIds.add(response.requestId);
+  // FIFO trim. Set iteration order is insertion order, so the
+  // first key is the oldest. Drop until we're under the cap.
+  while (sidebarState.seenRequestIds.size > SEEN_REQUEST_IDS_CAP) {
+    const oldest = sidebarState.seenRequestIds.values().next().value;
+    if (oldest === undefined) break;
+    sidebarState.seenRequestIds.delete(oldest);
+  }
   sidebarState.results = addResult(sidebarState.results, response.result);
+  // addResult prepends + caps at 5. Re-derive the requestId →
+  // index pointer to keep it consistent. We can't track it by
+  // adjusting old indices on prepend because the result type
+  // doesn't carry requestId — but the new entry is always at 0,
+  // and the rest of the indices in the Map shift by +1 (until
+  // they fall off the cap). Simpler to rebuild from a side
+  // table that tracks (requestId → result-shape) at insertion:
+  // since result doesn't carry requestId, we maintain the Map
+  // here by inserting at 0 for the new entry and reconstructing
+  // from existing entries' positions.
+  rebuildResultIndex(sidebarState, response.requestId);
   paintSidebar(shadow, sidebarState);
+}
+
+function rebuildResultIndex(state: SidebarUiState, newRequestId: string): void {
+  // The just-prepended entry is at index 0 with `newRequestId`.
+  // Older entries shift down; entries pushed past the cap are
+  // dropped. We rebuild the Map by walking the previous mapping
+  // and bumping each existing index by 1, then evicting anything
+  // outside the new result-list bounds.
+  const next = new Map<string, number>();
+  next.set(newRequestId, 0);
+  for (const [reqId, oldIdx] of state.resultIndexByRequestId) {
+    const newIdx = oldIdx + 1;
+    if (newIdx < state.results.length) next.set(reqId, newIdx);
+  }
+  state.resultIndexByRequestId = next;
 }
 
 // Listen for unsolicited push messages from the background (e.g.
@@ -1124,7 +1317,9 @@ const SIDEBAR_CSS = `
   }
   .subflow-result.outcome-http-error,
   .subflow-result.outcome-network-error,
-  .subflow-result.outcome-timeout {
+  .subflow-result.outcome-timeout,
+  .subflow-result.outcome-precondition-failed,
+  .subflow-result.outcome-interrupted {
     border-color: #fca5a5;
     background: rgba(248, 113, 113, 0.08);
   }

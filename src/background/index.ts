@@ -21,6 +21,261 @@ import type { PromptVariables, Workflow } from "@/lib/types";
 const subtitles = new SubtitleService({ fetchSubtitleXml });
 const orchestrator = new WorkflowOrchestrator();
 
+// SPEC §6.6 — MV3 service workers can be terminated by Chrome when
+// idle, and a workflow request that was in flight at that moment
+// loses its Promise context. The "background service interrupted"
+// detection works in two layers:
+//
+//   1. Every workflow execution is logged to chrome.storage.local
+//      under \`subflow.inFlightWorkflows\` (the IN_FLIGHT_STORAGE_KEY
+//      constant below) with the request envelope. When the runner
+//      resolves (success OR failure), the entry is removed.
+//   2. On service-worker startup, we read that key. Any residual
+//      entries belonged to a previous worker that was terminated
+//      mid-flight; we synthesise an outcome:"interrupted" result
+//      and push it to the originating tab so the sidebar can
+//      render the failure + a Retry button. Then we clear the
+//      storage entry.
+//
+// We use chrome.storage.local rather than session storage because
+// the worker termination wipes any in-memory state, and we want
+// the detection to survive across worker generations (potentially
+// many minutes between the original request and the next user
+// action that wakes the worker).
+const IN_FLIGHT_STORAGE_KEY = "subflow.inFlightWorkflows";
+
+interface InFlightRecord {
+  tabId: number;
+  videoId: string;
+  requestId: string;
+  workflowId: string;
+  workflowName: string;
+  // Milliseconds since the unix epoch when the workflow dispatch
+  // landed. Used by replayInterruptedWorkflows to TTL-out very old
+  // residual records (older than IN_FLIGHT_MAX_AGE_MS) — a worker
+  // generation that was killed weeks ago wouldn't produce a
+  // meaningful Retry; better to drop the entry than nag the user
+  // about a long-forgotten attempt.
+  startedAt: number;
+}
+
+// Records older than this on service-worker wake-up are dropped
+// rather than replayed. Chosen to be generous (a day) so legitimate
+// quick-fail cases like "user closed laptop overnight" still
+// produce a Retry-able entry the next morning.
+const IN_FLIGHT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+// Serialise the read-modify-write of subflow.inFlightWorkflows
+// through a single Promise chain so concurrent dispatches can't
+// interleave their updates and lose entries. Each operation
+// (record OR clear) queues onto inFlightQueue; the runtime
+// processes them strictly in arrival order.
+let inFlightQueue: Promise<void> = Promise.resolve();
+
+function recordInFlight(record: InFlightRecord): Promise<void> {
+  return enqueueInFlightOp((current) => {
+    const next = { ...current };
+    next[record.requestId] = record;
+    return next;
+  });
+}
+
+function clearInFlight(requestId: string): Promise<void> {
+  return enqueueInFlightOp((current) => {
+    if (current[requestId] === undefined) return current;
+    const next = { ...current };
+    delete next[requestId];
+    return next;
+  });
+}
+
+function enqueueInFlightOp(
+  fn: (current: Record<string, InFlightRecord>) => Record<string, InFlightRecord>,
+): Promise<void> {
+  const chained = inFlightQueue.then(async () => {
+    const current = await readInFlight();
+    const next = fn(current);
+    if (next !== current) await writeInFlight(next);
+  });
+  // Keep the queue alive even if a single op rejects (e.g. quota
+  // exceeded). The chained promise itself still surfaces the
+  // rejection to the caller so they can choose what to do; the
+  // queue-internal handle just swallows it so the next op can
+  // still be scheduled.
+  inFlightQueue = chained.catch(() => undefined);
+  return chained;
+}
+
+async function readInFlight(): Promise<Record<string, InFlightRecord>> {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.storage.local.get([IN_FLIGHT_STORAGE_KEY], (items) => {
+        // chrome.storage callbacks report failures via
+        // chrome.runtime.lastError, not throws. Propagate the
+        // error rather than silently returning {} — otherwise
+        // enqueueInFlightOp would compute a new state from a fake
+        // empty base and writeInFlight would clobber any real
+        // entries that exist.
+        const last = chrome.runtime.lastError;
+        if (last !== undefined && last !== null) {
+          reject(new Error(last.message ?? "chrome.storage.local.get failed"));
+          return;
+        }
+        const raw = items?.[IN_FLIGHT_STORAGE_KEY];
+        // No saved key at all is fine — that's an empty
+        // scratchpad. Only reject types we can't iterate safely.
+        if (raw === null || raw === undefined) {
+          resolve({});
+          return;
+        }
+        if (typeof raw !== "object" || Array.isArray(raw)) {
+          // Saved value exists but isn't iterable as Record.
+          // Treat as empty + log a warning. Returning {} here
+          // means the next write will clobber the corrupted
+          // value, restoring the scratchpad to a usable shape.
+          // Earlier we rejected on this path, but that turned a
+          // single corrupted value into a permanent disable of
+          // interruption detection (the rejection was swallowed
+          // by every caller). Better to lose ONE generation's
+          // residual than to lose them all forever.
+          console.warn(
+            "subflow: inFlightWorkflows scratchpad has unexpected shape; resetting",
+          );
+          resolve({});
+          return;
+        }
+        resolve(raw as Record<string, InFlightRecord>);
+      });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+}
+
+async function writeInFlight(
+  records: Record<string, InFlightRecord>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.storage.local.set({ [IN_FLIGHT_STORAGE_KEY]: records }, () => {
+        // Storage failures (quota exceeded, extension reload mid-
+        // write) come back via chrome.runtime.lastError. Reject so
+        // the caller can decide how to surface the failure rather
+        // than silently pretending the scratchpad updated.
+        const last = chrome.runtime.lastError;
+        if (last !== undefined && last !== null) {
+          reject(new Error(last.message ?? "chrome.storage.local.set failed"));
+          return;
+        }
+        resolve();
+      });
+    } catch (err) {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    }
+  });
+}
+
+// Run once at service-worker startup. Any in-flight entry left over
+// from a previous worker generation is a request that didn't get to
+// emit a result — synthesise an "interrupted" result and push it to
+// the originating tab.
+void replayInterruptedWorkflows().catch(() => {
+  // readInFlight can reject (storage failure, unexpected stored
+  // shape). Don't surface the rejection — service-worker startup
+  // shouldn't crash on a corrupted scratchpad. Worst case: a
+  // genuine interrupted request goes unreplayed for this wake;
+  // the user can still hit Retry on the next interaction.
+});
+
+// Per-field shape check so a corrupted / hand-edited scratchpad
+// can't drive replay with garbage. The replay loop only handles
+// records that pass this guard; anything else is silently dropped
+// (the user wouldn't have meaningful action on a malformed
+// residue anyway).
+function isInFlightRecord(value: unknown): value is InFlightRecord {
+  if (value === null || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  // tabId must be a non-negative integer (chrome.tabs ids are
+  // positive ints) and startedAt a finite number — guard against
+  // NaN / Infinity / non-int values that pass typeof but blow up
+  // when handed to chrome.tabs.sendMessage or when subtracting
+  // Date.now() - startedAt for the TTL check.
+  if (
+    typeof r.tabId !== "number" ||
+    !Number.isInteger(r.tabId) ||
+    r.tabId < 0
+  ) {
+    return false;
+  }
+  if (typeof r.startedAt !== "number" || !Number.isFinite(r.startedAt)) {
+    return false;
+  }
+  return (
+    typeof r.videoId === "string" &&
+    typeof r.requestId === "string" &&
+    typeof r.workflowId === "string" &&
+    typeof r.workflowName === "string"
+  );
+}
+
+async function replayInterruptedWorkflows(): Promise<void> {
+  // Route the snapshot+clear through the serialised queue so we
+  // can't race a concurrent execute-workflow dispatch. The queued
+  // op atomically: (a) reads the current scratchpad, (b) captures
+  // the entries to replay, (c) clears the scratchpad. Any
+  // dispatches queued AFTER this op will see an empty scratchpad
+  // and proceed normally; any dispatches queued BEFORE will be
+  // observed here as residual entries (and we replay them — they
+  // belonged to a worker generation that didn't complete).
+  const now = Date.now();
+  let entries: InFlightRecord[] = [];
+  await enqueueInFlightOp((current) => {
+    entries = Object.values(current)
+      .filter(isInFlightRecord)
+      // TTL: drop records whose workflow started more than
+      // IN_FLIGHT_MAX_AGE_MS ago. The user has long since moved on;
+      // surfacing a Retry button for last week's attempt is
+      // surprising rather than helpful.
+      .filter((r) => now - r.startedAt <= IN_FLIGHT_MAX_AGE_MS);
+    // Clear the scratchpad on any non-empty input — both the
+    // valid records we're about to drain (so the next wake
+    // doesn't replay them) AND any malformed garbage that
+    // wouldn't be replayed but would otherwise persist forever.
+    // Skip the write only when the scratchpad is already empty.
+    if (Object.keys(current).length === 0) return current;
+    return {};
+  });
+  if (entries.length === 0) return;
+  // Push the interrupted-result message to each originating tab in
+  // parallel. Sequencing was unnecessary — these are independent
+  // tab.sendMessage calls — and the await-in-loop pattern would
+  // keep the worker alive longer than the replay actually needs.
+  await Promise.all(
+    entries.map(async (record) => {
+      try {
+        await chrome.tabs.sendMessage(record.tabId, {
+          type: "subflow:workflow-result",
+          videoId: record.videoId,
+          requestId: record.requestId,
+          result: {
+            workflowId: record.workflowId,
+            workflowName: record.workflowName,
+            // Dedicated outcome variant so the sidebar can render
+            // a precise label without sniffing the body string.
+            outcome: "interrupted",
+            body:
+              "Background service was interrupted while this workflow was running. Click Retry to start over.",
+            timestamp: Date.now(),
+          },
+          suppressed: false,
+        });
+      } catch {
+        // Tab may have closed in the meantime; nothing to surface.
+      }
+    }),
+  );
+}
+
 chrome.action.onClicked.addListener(() => {
   chrome.runtime.openOptionsPage();
 });
@@ -399,41 +654,89 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           });
           return false;
         }
-        const dispatch =
-          message.trigger === "auto"
-            ? orchestrator.runAutoRun(
-                tabId,
-                message.videoId,
-                message.workflow,
-                realVariables,
-              )
-            : orchestrator.runManual(tabId, message.workflow, realVariables);
-        dispatch
-          .then((result) => {
+        // Record the in-flight workflow so a service-worker
+        // termination mid-fetch can be surfaced to the sidebar on
+        // the next wake (see replayInterruptedWorkflows). Queue
+        // the record BEFORE dispatching so a fast resolution
+        // (notably an autoRun dedup hit that resolves on the next
+        // microtask) can't clear before the record exists. Both
+        // operations route through the serialised in-flight queue.
+        const inFlightRecord: InFlightRecord = {
+          tabId,
+          videoId: message.videoId,
+          requestId: message.requestId,
+          workflowId: message.workflow.id,
+          workflowName: message.workflow.name,
+          startedAt: Date.now(),
+        };
+        // Record write SHOULD land before dispatching so a worker
+        // terminated mid-fetch leaves a recoverable trail. Chain
+        // dispatch off the record-landing promise via .then (the
+        // router callback is sync; return true below keeps the
+        // message channel open).
+        //
+        // Best-effort, not guaranteed: if chrome.storage.local
+        // itself fails (quota exceeded, extension reload mid-
+        // write), recordInFlight rejects. We catch that and
+        // proceed to dispatch anyway, since refusing to run the
+        // workflow because of a storage failure would be worse
+        // for the user than losing the interruption-detection
+        // safety net for this one request.
+        const recordingPromise = recordInFlight(inFlightRecord).catch(() => {
+          /* swallow — see comment above */
+        });
+        recordingPromise
+          .then(() => {
+            return message.trigger === "auto"
+              ? orchestrator.runAutoRun(
+                  tabId,
+                  message.videoId,
+                  message.workflow,
+                  realVariables,
+                )
+              : orchestrator.runManual(tabId, message.workflow, realVariables);
+          })
+          .then(async (result) => {
             // autoRun dedup: a null result means "this (tabId,
             // videoId, workflowId) has already fired in this tab".
             // Still send a response so the sender's promise settles,
             // but mark it suppressed so the sidebar doesn't add an
             // entry to the result list.
+            // Send the response FIRST so the sidebar gets its
+            // promise settled while the worker's still alive. The
+            // clear happens after — if the worker dies between
+            // sendResponse and clearInFlight, the residual record
+            // gets replayed as "interrupted" on next wake, and
+            // the sidebar's requestId dedup either drops the
+            // duplicate (success case) or upgrades the
+            // network-error entry to "interrupted". The opposite
+            // ordering (clear first) would lose the replay record
+            // on a worker termination between clear and
+            // sendResponse, leaving the sidebar's catch handler to
+            // render a generic network-error with no later upgrade.
             if (result === null) {
+              // Dedup hit — no actual request was issued.
               sendResponse({
                 videoId: message.videoId,
                 requestId: message.requestId,
                 result: null,
                 suppressed: true,
               });
-              return;
+            } else {
+              // SPEC §6.7: aborted requests do not produce sidebar
+              // entries.
+              sendResponse({
+                videoId: message.videoId,
+                requestId: message.requestId,
+                result,
+                suppressed: result.outcome === "aborted",
+              });
             }
-            // SPEC §6.7: aborted requests do not produce sidebar
-            // entries.
-            sendResponse({
-              videoId: message.videoId,
-              requestId: message.requestId,
-              result,
-              suppressed: result.outcome === "aborted",
-            });
+            await recordingPromise
+              .then(() => clearInFlight(message.requestId))
+              .catch(() => undefined);
           })
-          .catch((err: unknown) => {
+          .catch(async (err: unknown) => {
             sendResponse({
               videoId: message.videoId,
               requestId: message.requestId,
@@ -446,6 +749,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
               },
               suppressed: false,
             });
+            // Clear AFTER sendResponse — same rationale as the
+            // resolved path above. If the worker is terminated
+            // between sendResponse and the clear, the residual
+            // record gets replayed on next wake and dedups
+            // against the network-error we just rendered (the
+            // sidebar's upgrade-to-interrupted path turns the
+            // entry into something more accurate).
+            await recordingPromise
+              .then(() => clearInFlight(message.requestId))
+              .catch(() => undefined);
           });
       }
       // Keep the message channel open for the async sendResponse.

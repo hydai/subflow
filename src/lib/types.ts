@@ -162,7 +162,14 @@ export type WorkflowOutcome =
   // "network-error" so the sidebar can style it differently and the
   // user is told to wait / retry instead of suspecting a fetch
   // failure.
-  | "precondition-failed";
+  | "precondition-failed"
+  // The background service worker was terminated by Chrome while
+  // this workflow was running. Surfaced via the
+  // replayInterruptedWorkflows path on next service-worker wake.
+  // Distinct from "network-error" so the sidebar's label is
+  // accurate ("Background service interrupted" vs the generic
+  // "Workflow request failed").
+  | "interrupted";
 
 export interface WorkflowResult {
   workflowId: string;
