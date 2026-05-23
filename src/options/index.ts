@@ -467,7 +467,17 @@ async function persistAndCommit(next: Workflow[]): Promise<void> {
     return;
   }
   state.workflows = next;
-  state.saveError = null;
+  // Only clear workflow-related saveError variants. A preferences-
+  // class warning (e.g. "Stored language priority was malformed")
+  // is NOT addressed by a successful workflow write, so leave it
+  // alone. The languages save path has the symmetric guard.
+  if (
+    state.saveError !== null &&
+    (state.saveError.includes("workflow") ||
+      state.saveError.includes("Some stored workflows"))
+  ) {
+    state.saveError = null;
+  }
   render();
 }
 
@@ -690,7 +700,14 @@ async function saveWorkflow(draft: Workflow, isNew: boolean): Promise<void> {
   state.workflows = next;
   state.edit = { mode: "list" };
   state.validationErrors = [];
-  state.saveError = null;
+  // Symmetric to persistAndCommit: clear workflow-class banner only.
+  if (
+    state.saveError !== null &&
+    (state.saveError.includes("workflow") ||
+      state.saveError.includes("Some stored workflows"))
+  ) {
+    state.saveError = null;
+  }
   render();
 }
 

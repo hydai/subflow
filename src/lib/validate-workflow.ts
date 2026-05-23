@@ -54,20 +54,24 @@ export function validateWorkflow(workflow: Workflow): WorkflowValidationError[] 
   // Trim-aware "required" check: a whitespace-only URL is the same
   // class of error as an empty one ("you forgot to fill this in"),
   // not a scheme error. Consistent with the name / promptTemplate
-  // trim-aware checks above.
-  if (workflow.url.trim().length === 0) {
+  // trim-aware checks above. Operate on the trimmed value for the
+  // rest of the URL checks too, so leading / trailing whitespace
+  // doesn't break the scheme test.
+  const urlTrimmed = workflow.url.trim();
+  if (urlTrimmed.length === 0) {
     errors.push({ field: "url", message: "URL is required." });
-  } else if (!workflow.url.startsWith("https://")) {
+  } else if (!urlTrimmed.toLowerCase().startsWith("https://")) {
     // SPEC §7.4 says the URL string must literally begin with
-    // "https://", not merely parse to an https URL. The parser
-    // accepts shorthand like "https:example.com" (scheme-only,
-    // no //), so we gate on the string prefix BEFORE parsing.
+    // "https://" (case-insensitive — schemes are case-insensitive
+    // per RFC 3986). The parser accepts shorthand like
+    // "https:example.com" (scheme-only, no //), so we gate on the
+    // string prefix BEFORE parsing.
     errors.push({
       field: "url",
       message: "URL must use the https:// scheme.",
     });
   } else {
-    const parsed = safeParseUrl(workflow.url);
+    const parsed = safeParseUrl(urlTrimmed);
     if (parsed === null) {
       errors.push({ field: "url", message: "URL must be a valid URL." });
     } else if (parsed.protocol !== "https:") {
