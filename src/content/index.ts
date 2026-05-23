@@ -200,9 +200,11 @@ async function renderSidebar(
 ): Promise<void> {
   if (shadow === null) return;
   const myEpoch = (renderEpoch += 1);
-  // Install a minimal sync sidebarState synchronously so the
+  // Install a minimal sync sidebarState immediately so the
   // chrome.runtime.onMessage listener can sanity-check incoming
-  // pushes (which arrive without waiting for loadWorkflows).
+  // pushes (which arrive without waiting for loadWorkflows) — and
+  // crucially so any subtitle / workflow result push that arrives
+  // DURING the workflows-load await is captured rather than lost.
   sidebarState = {
     workflows: [],
     subtitle: null,
@@ -217,13 +219,19 @@ async function renderSidebar(
     // don't overwrite the newer videoId's state.
     return;
   }
-  sidebarState = {
-    workflows,
-    subtitle: null,
-    results: [],
-    pendingRequests: new Map(),
-    videoId,
-  };
+  // Preserve any subtitle / results / pendingRequests that landed
+  // during the await. Only overwrite workflows.
+  if (sidebarState !== null && sidebarState.videoId === videoId) {
+    sidebarState.workflows = workflows;
+  } else {
+    sidebarState = {
+      workflows,
+      subtitle: null,
+      results: [],
+      pendingRequests: new Map(),
+      videoId,
+    };
+  }
   paintSidebar(shadow, sidebarState);
   void requestSubtitle(videoId, shadow, myEpoch);
 }
@@ -465,6 +473,8 @@ function formatOutcomeLabel(result: WorkflowResult): string {
       return "Aborted";
     case "network-error":
       return "Network error";
+    case "precondition-failed":
+      return "Waiting for subtitle";
   }
 }
 
@@ -535,22 +545,24 @@ async function triggerWorkflow(
   }
 }
 
-function makePlaceholderVariables(videoId: string) {
+function makePlaceholderVariables(videoId: string): import("@/lib/types").PromptVariables {
   // The background's execute-workflow handler OVERRIDES whatever
   // PromptVariables we pass here with the authoritative values it
-  // builds from its SubtitleService cache (title / channel /
-  // duration_seconds / transcript). This placeholder exists ONLY
-  // to satisfy the message-envelope validator, which requires the
-  // shape — the values are immediately discarded background-side
-  // before the workflow request is built. The cross-field check
-  // (envelope.videoId === variables.video_id) is preserved so the
-  // sender's identity claims still need to be consistent.
+  // builds from its SubtitleService cache. This placeholder exists
+  // ONLY to satisfy the message-envelope validator's shape check;
+  // the values are immediately discarded background-side. Include
+  // every field of PromptVariables explicitly (even the
+  // string-or-undefined ones) so future tightening of the validator
+  // can't reject this shape without us noticing at compile time.
   return {
     transcript: "",
     transcript_with_timestamps: "",
+    title: undefined,
+    channel: undefined,
     video_id: videoId,
     video_url: `https://www.youtube.com/watch?v=${videoId}`,
     language: "",
+    duration_seconds: undefined,
   };
 }
 

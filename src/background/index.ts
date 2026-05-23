@@ -368,9 +368,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             result: {
               workflowId: message.workflow.id,
               workflowName: message.workflow.name,
-              outcome: "network-error",
+              // Distinct outcome so the sidebar can present this as
+              // a "wait + retry" situation rather than a network
+              // failure (which would suggest the endpoint is
+              // unreachable).
+              outcome: "precondition-failed",
               body:
-                "Subtitle not loaded yet — open the video, wait for the sidebar to show \"Loaded\", then try again.",
+                "Subtitle not loaded yet — wait for the sidebar to show \"Loaded\", then try again.",
               timestamp: Date.now(),
             },
             suppressed: false,

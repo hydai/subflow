@@ -53,6 +53,11 @@ interface TabState {
   // resolves — so an invalidation that races with an in-flight fetch
   // can't be "undone" by the late-arriving response.
   epoch: number;
+  // Most-recently-used cache key per videoId, so buildPromptVariables
+  // returns the language the user actually got served (not the
+  // language they USED to be served before changing priority).
+  // Map<videoId, cacheKey>.
+  recentCacheKey: Map<string, string>;
 }
 
 export class SubtitleService {
@@ -74,23 +79,28 @@ export class SubtitleService {
   // yet — the caller (background's execute-workflow handler) should
   // refuse the workflow request rather than POST `{ prompt: "" }`.
   //
-  // We deliberately pick the FIRST cache entry for the given videoId
-  // (regardless of language code) because each video has one
-  // matched-language slot in practice; if a user changes the language
-  // priority mid-session and the previous language is still cached,
-  // we'd rather hand out something current than refuse.
+  // Uses the MOST RECENTLY SERVED cache key for this videoId so the
+  // returned variables match the language the user just saw. Falls
+  // back to the first match only if no recent-key record exists
+  // (e.g. cache was hand-populated by a test).
   buildPromptVariables(tabId: number, videoId: string): PromptVariables | null {
     const state = this.tabs.get(tabId);
     if (state === undefined) return null;
     const playerData = state.playerData;
     if (playerData === null || !playerData.ok) return null;
     if (playerData.data.videoDetails.videoId !== videoId) return null;
-    const prefix = `${videoId}|`;
     let subtitle: SubtitleSuccess | undefined;
-    for (const [key, value] of state.subtitleCache) {
-      if (key.startsWith(prefix)) {
-        subtitle = value;
-        break;
+    const recentKey = state.recentCacheKey.get(videoId);
+    if (recentKey !== undefined) {
+      subtitle = state.subtitleCache.get(recentKey);
+    }
+    if (subtitle === undefined) {
+      const prefix = `${videoId}|`;
+      for (const [key, value] of state.subtitleCache) {
+        if (key.startsWith(prefix)) {
+          subtitle = value;
+          break;
+        }
       }
     }
     if (subtitle === undefined) return null;
@@ -191,6 +201,10 @@ export class SubtitleService {
       // request.
       if (result.status === "ok" && state.epoch === epochAtStart) {
         state.subtitleCache.set(cacheKey, result);
+        // Remember the language we just served for this video so
+        // buildPromptVariables returns this language (not an
+        // older one cached from a previous priority).
+        state.recentCacheKey.set(videoId, cacheKey);
       }
       return result;
     } finally {
@@ -273,6 +287,7 @@ export class SubtitleService {
         subtitleCache: new Map(),
         inFlight: new Map(),
         epoch: 0,
+        recentCacheKey: new Map(),
       };
       this.tabs.set(tabId, state);
     }
