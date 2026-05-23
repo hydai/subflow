@@ -14,12 +14,16 @@
 //
 // content.js is loaded by Chrome as a classic script (the
 // `content_scripts` entry in manifest.json does not set `"type":
-// "module"`), so the emitted bundle must contain no ESM module syntax.
-// We deliberately keep the file import-graph tiny so Rollup inlines
-// everything into a single self-contained bundle: parseWatchPageUrl is
-// the only consumer of @/lib/watch-page, so it's inlined; no message-
-// tag constants are imported (the whitelist is duplicated inline and
-// kept in sync by tests/content-bridge.test.ts).
+// "module"`), so the emitted bundle must contain no ESM module
+// syntax. We deliberately keep the @/lib imports limited to modules
+// that THIS file is the only consumer of (parseWatchPageUrl from
+// @/lib/watch-page and addResult / truncateBody from
+// @/lib/sidebar-utils). Rollup inlines those into the classic-script
+// bundle. Message tag constants are duplicated inline rather than
+// imported from @/lib/messages — that module is shared with
+// background, and a shared import would force Rollup to emit a
+// chunk that breaks the classic-script load. The drift test in
+// tests/content-bridge.test.ts keeps the inline duplicates in sync.
 
 import { parseWatchPageUrl } from "@/lib/watch-page";
 import { addResult, truncateBody } from "@/lib/sidebar-utils";
@@ -175,8 +179,11 @@ function createSidebarRoot(): SidebarRoot {
 
 // Per-mount sidebar state. The renderer is re-invoked on every
 // videoId change so we keep the state object alive at module scope
-// and re-paint into the same shadow root rather than wiping the
-// tree on every result.
+// and re-paint the shadow root from this state on each update. The
+// current implementation does a full shadow.replaceChildren() rebuild
+// on every paint — incremental DOM reconciliation (preserving scroll
+// / focus inside the sidebar) is a known follow-up and intentionally
+// out of scope for the initial #12 cut.
 //
 // Named SidebarUiState here to avoid colliding with the
 // `SidebarState` exported from src/lib/types.ts, which is the
@@ -322,12 +329,36 @@ async function loadWorkflows(): Promise<Workflow[]> {
           resolve([]);
           return;
         }
-        resolve(raw as Workflow[]);
+        // Sanitize each entry — storage could contain malformed data
+        // (manual edit, older schema, or partial write). Drop
+        // anything that doesn't have the shape we render against, so
+        // renderWorkflowButtons can't crash on \`w.autoRun\` of a
+        // non-object.
+        const sanitized = (raw as unknown[]).filter(isWorkflowShape);
+        resolve(sanitized);
       });
     } catch {
       resolve([]);
     }
   });
+}
+
+function isWorkflowShape(value: unknown): value is Workflow {
+  if (value === null || typeof value !== "object") return false;
+  const w = value as Record<string, unknown>;
+  if (typeof w.id !== "string" || w.id.length === 0) return false;
+  if (typeof w.name !== "string") return false;
+  if (typeof w.url !== "string") return false;
+  if (typeof w.promptTemplate !== "string") return false;
+  if (typeof w.autoRun !== "boolean") return false;
+  if (
+    w.headers === null ||
+    typeof w.headers !== "object" ||
+    Array.isArray(w.headers)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function paintSidebar(shadow: ShadowRoot, state: SidebarUiState): void {
