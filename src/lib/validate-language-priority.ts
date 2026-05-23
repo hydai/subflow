@@ -25,8 +25,11 @@ export interface LanguagePriorityValidationResult {
   // validation fails (e.g. show that `  zh-TW  ` would persist as
   // `zh-TW`).
   trimmed: string[];
-  // Top-level errors that prevent saving the list as a whole
-  // (empty list, missing-at-position-N). Empty array means OK.
+  // Mixed list of per-row AND whole-list errors. Per-row entries
+  // set `index`; whole-list entries leave `index` undefined. Empty
+  // array means OK. Callers split this into the two surfaces using
+  // the `index` discriminator (per-row attaches via
+  // aria-describedby, whole-list goes into the section banner).
   errors: LanguagePriorityValidationError[];
 }
 
@@ -52,8 +55,10 @@ export function validateLanguagePriority(
   // Per-row blank check. Even one blank row blocks save: silently
   // dropping it would mask a user typo (they meant to type a code
   // but forgot).
+  let blankRowCount = 0;
   trimmed.forEach((s, idx) => {
     if (s.length === 0) {
+      blankRowCount += 1;
       errors.push({
         index: idx,
         message: `第 ${idx + 1} 列語言代碼為空，請填入或移除空列`,
@@ -61,12 +66,13 @@ export function validateLanguagePriority(
     }
   });
 
-  // If every entry was blank, the per-row errors above already
-  // covered each row, but the user also needs a top-level message
-  // explaining the at-least-one rule. (validate-and-block-on-empty
-  // earlier covers length === 0; here we cover "length > 0 but all
-  // blank".)
-  if (errors.length === trimmed.length) {
+  // If every entry was blank, the user also needs the top-level
+  // "need at least one" message in the section banner — the per-row
+  // errors below each input don't explain WHY the save is being
+  // refused outright. Counted with an explicit `blankRowCount`
+  // (rather than `errors.length === trimmed.length`) so future
+  // non-blank rules can be added without invalidating this check.
+  if (blankRowCount === trimmed.length) {
     errors.push({ message: "至少需設定一個語言偏好" });
   }
 

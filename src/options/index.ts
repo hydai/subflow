@@ -330,16 +330,24 @@ function renderLanguageSection(): HTMLElement {
 
 function addLang(): void {
   state.languagePriority.push("");
+  // Stored row errors carry indices from the LAST validation run.
+  // Adding / removing / moving rows shifts subsequent indices, so
+  // the cached errors would highlight the wrong row. Clear them on
+  // any structural edit — the next save attempt re-validates and
+  // produces fresh indices.
+  state.languageRowErrors = [];
   render();
 }
 function removeLang(idx: number): void {
   state.languagePriority.splice(idx, 1);
+  state.languageRowErrors = [];
   render();
 }
 function moveLang(from: number, to: number): void {
   if (to < 0 || to >= state.languagePriority.length) return;
   const [item] = state.languagePriority.splice(from, 1);
   state.languagePriority.splice(to, 0, item!);
+  state.languageRowErrors = [];
   render();
 }
 async function saveLanguages(): Promise<void> {
