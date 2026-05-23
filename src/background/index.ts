@@ -129,11 +129,19 @@ async function readInFlight(): Promise<Record<string, InFlightRecord>> {
           return;
         }
         if (typeof raw !== "object" || Array.isArray(raw)) {
-          // Saved value exists but isn't iterable as Record;
-          // surface as an error rather than silently treating as
-          // empty, since clobbering it could lose legitimate state
-          // from a future-schema worker.
-          reject(new Error("subflow.inFlightWorkflows storage shape is not a Record"));
+          // Saved value exists but isn't iterable as Record.
+          // Treat as empty + log a warning. Returning {} here
+          // means the next write will clobber the corrupted
+          // value, restoring the scratchpad to a usable shape.
+          // Earlier we rejected on this path, but that turned a
+          // single corrupted value into a permanent disable of
+          // interruption detection (the rejection was swallowed
+          // by every caller). Better to lose ONE generation's
+          // residual than to lose them all forever.
+          console.warn(
+            "subflow: inFlightWorkflows scratchpad has unexpected shape; resetting",
+          );
+          resolve({});
           return;
         }
         resolve(raw as Record<string, InFlightRecord>);

@@ -1097,25 +1097,29 @@ function handleWorkflowResponse(
   // "interrupted" replay arrives later, swap the entry in place.
   if (sidebarState.seenRequestIds.has(response.requestId)) {
     if (response.result.outcome === "interrupted") {
-      // Track the original-entry index per requestId so we know
-      // EXACTLY which list row to upgrade. Looking it up by
-      // workflowId + outcome would be ambiguous if the same
-      // workflow has been retried and has multiple network-error
-      // entries. resultIndexByRequestId records each requestId's
-      // current position in the results array at the moment it was
-      // first added, and addResult's prepend semantics mean we
-      // need to adjust on every prepend — but the existing entry's
-      // requestId pointer survives any prepend because we update
-      // it when the new entry slots into position 0.
+      // Try to upgrade the existing row in place; resultIndexByRequestId
+      // tracks each requestId's current position in the results
+      // array. If the upgrade target was already evicted from the
+      // 5-row cap (its requestId is in seenRequestIds but the
+      // index map no longer has an entry), we fall through to
+      // re-add the "interrupted" result as a fresh row — the user
+      // wouldn't see the upgrade otherwise.
       const idx = sidebarState.resultIndexByRequestId.get(response.requestId);
       if (idx !== undefined && sidebarState.results[idx] !== undefined) {
         const next = [...sidebarState.results];
         next[idx] = response.result;
         sidebarState.results = next;
         paintSidebar(shadow, sidebarState);
+        return;
       }
+      // Fall through: existing entry was evicted. Drop the
+      // requestId from seenRequestIds so the addResult flow
+      // below re-adds it as a fresh row.
+      sidebarState.seenRequestIds.delete(response.requestId);
+    } else {
+      // Non-upgrade dup: drop silently.
+      return;
     }
-    return;
   }
   sidebarState.seenRequestIds.add(response.requestId);
   // FIFO trim. Set iteration order is insertion order, so the
