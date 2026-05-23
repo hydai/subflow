@@ -20,6 +20,8 @@ import {
 } from "@/lib/storage";
 import { validateWorkflow } from "@/lib/validate-workflow";
 import type { WorkflowValidationError } from "@/lib/validate-workflow";
+import { validateLanguagePriority } from "@/lib/validate-language-priority";
+import type { LanguagePriorityValidationError } from "@/lib/validate-language-priority";
 import type { Workflow } from "@/lib/types";
 
 const root = document.getElementById("app")!;
@@ -66,6 +68,9 @@ interface AppState {
   // Inline error for the language-priority section. Lives next to
   // the section per SPEC §7.6.
   languageError: string | null;
+  // Per-row errors from validateLanguagePriority (e.g. row N is
+  // blank). Anchored to the offending input via aria-describedby.
+  languageRowErrors: LanguagePriorityValidationError[];
 }
 
 const state: AppState = {
@@ -75,6 +80,7 @@ const state: AppState = {
   validationErrors: [],
   banner: null,
   languageError: null,
+  languageRowErrors: [],
 };
 
 // Clear the banner when its `source` is in the set of sources that
@@ -258,14 +264,73 @@ function renderLanguageSection(): HTMLElement {
   const list = el("div", { class: "lang-prefs" });
   state.languagePriority.forEach((lang, idx) => {
     const row = el("div", { class: "header-row" });
+    const inputId = `lang-${idx}`;
     const input = el("input", {
       type: "text",
+      id: inputId,
       value: lang,
       "aria-label": `Language ${idx + 1}`,
+      // Issue #10 hints the placeholder should suggest multiple
+      // codes so users discover ordered-list semantics. Each input
+      // holds ONE code, so show "zh-TW, en" as a hint that the
+      // surrounding list is the multi-code container.
+      placeholder: "e.g. zh-TW, en",
     }) as HTMLInputElement;
     input.addEventListener("input", () => {
       state.languagePriority[idx] = input.value;
+      // The validation snapshot reflects the last save attempt. As
+      // soon as the user starts typing in any row, the stored
+      // row-error indices and the section banner stop describing
+      // reality (the user is in the middle of fixing them). Clear
+      // both AND scrub the visible row errors + banner from the DOM
+      // without doing a full re-render — that would blow away the
+      // user's caret in this input.
+      if (
+        state.languageRowErrors.length > 0 ||
+        state.languageError !== null
+      ) {
+        clearLanguageValidationState();
+        for (let i = 0; i < state.languagePriority.length; i += 1) {
+          const otherId = `lang-${i}`;
+          const otherInput = document.getElementById(otherId);
+          otherInput?.removeAttribute("aria-invalid");
+          otherInput?.removeAttribute("aria-describedby");
+          const errNode = document.getElementById(`${otherId}-err`);
+          errNode?.remove();
+        }
+        const langPrefs = document.querySelector(".lang-prefs");
+        if (langPrefs !== null) {
+          for (const node of Array.from(langPrefs.children)) {
+            if (node.classList.contains("error")) node.remove();
+          }
+        }
+      }
+      // The Save button's enabled state is also derived from input
+      // contents (disabled when no row trims to non-empty). Update
+      // it directly without a full re-render to preserve the caret
+      // — same trick as the row-error scrub above.
+      const saveBtn = document.querySelector<HTMLButtonElement>(
+        "[data-role='save-languages']",
+      );
+      if (saveBtn !== null) {
+        saveBtn.disabled = !state.languagePriority.some(
+          (s) => s.trim().length > 0,
+        );
+      }
     });
+    const rowError = state.languageRowErrors.find((e) => e.index === idx);
+    if (rowError !== undefined) {
+      const errId = `${inputId}-err`;
+      input.setAttribute("aria-invalid", "true");
+      // Merge with any existing aria-describedby (e.g. a future
+      // hint id added here) so screen readers announce both. The
+      // edit-form `field()` helper uses the same merge pattern.
+      const prior = input.getAttribute("aria-describedby");
+      input.setAttribute(
+        "aria-describedby",
+        prior === null ? errId : `${prior} ${errId}`,
+      );
+    }
     const total = state.languagePriority.length;
     const up = iconButton(
       "↑",
@@ -279,9 +344,6 @@ function renderLanguageSection(): HTMLElement {
       () => moveLang(idx, idx + 1),
       { disabled: idx === total - 1 },
     );
-    // Disambiguate the visible "Remove" buttons for screen readers
-    // — they all share the same visible text but appear in a
-    // repeated list, so a row-scoped aria-label is needed.
     const labelHint = lang.trim().length > 0 ? lang : `language ${idx + 1}`;
     const del = labelledButton(
       "Remove",
@@ -291,6 +353,12 @@ function renderLanguageSection(): HTMLElement {
     );
     row.append(input, up, down, del);
     list.appendChild(row);
+    if (rowError !== undefined) {
+      const errId = `${inputId}-err`;
+      list.appendChild(
+        el("p", { class: "error", id: errId, role: "alert" }, rowError.message),
+      );
+    }
   });
   // Inline error for THIS section, rendered next to the inputs per
   // SPEC §7.6 ("inline 錯誤緊鄰相關欄位"). Not folded into the
@@ -304,7 +372,24 @@ function renderLanguageSection(): HTMLElement {
   const addRow = el("div", { class: "header-row" });
   const addBtn = button("Add language", () => addLang());
   addRow.appendChild(addBtn);
-  const saveBtn = button("Save languages", saveLanguages, "primary");
+  // Per issue #10's implementation note, the Save button is
+  // disabled when the list trims to no non-empty codes. The
+  // validator would reject the save anyway, but disabling the
+  // button surfaces the precondition before the user clicks.
+  const hasAnyNonBlank = state.languagePriority.some(
+    (s) => s.trim().length > 0,
+  );
+  const saveBtn = labelledButton(
+    "Save languages",
+    "Save languages",
+    saveLanguages,
+    "primary",
+  );
+  // Tagged for the input handler above so it can sync disabled
+  // state without doing a full re-render (which would blow away
+  // the user's caret while typing).
+  saveBtn.setAttribute("data-role", "save-languages");
+  if (!hasAnyNonBlank) (saveBtn as HTMLButtonElement).disabled = true;
   addRow.appendChild(saveBtn);
   section.append(list, addRow);
   return section;
@@ -312,47 +397,66 @@ function renderLanguageSection(): HTMLElement {
 
 function addLang(): void {
   state.languagePriority.push("");
+  clearLanguageValidationState();
   render();
 }
 function removeLang(idx: number): void {
   state.languagePriority.splice(idx, 1);
+  clearLanguageValidationState();
   render();
 }
 function moveLang(from: number, to: number): void {
   if (to < 0 || to >= state.languagePriority.length) return;
   const [item] = state.languagePriority.splice(from, 1);
   state.languagePriority.splice(to, 0, item!);
+  clearLanguageValidationState();
   render();
 }
+
+// Stored validation state (row errors AND the section banner) is a
+// snapshot of the LAST save attempt. Any structural edit (add /
+// remove / reorder) shifts subsequent row indices, so the row-anchor
+// would mismatch on the next render. The whole-list banner is a
+// summary of those row errors and the at-least-one rule, so it also
+// stops describing reality once the user starts editing. Clear both
+// together; the next save attempt re-validates and produces a
+// fresh snapshot.
+function clearLanguageValidationState(): void {
+  state.languageRowErrors = [];
+  state.languageError = null;
+}
 async function saveLanguages(): Promise<void> {
-  // SPEC §7.4: every entry must be a non-empty BCP-47 code AFTER
-  // trimming, and the list must contain at least one entry. Blank /
-  // whitespace-only entries block the save rather than getting
-  // silently dropped — otherwise the user would think their entry
-  // saved when it didn't. Errors live in `state.languageError` so
-  // they render INSIDE the language section (SPEC §7.6) rather than
-  // as a global banner.
-  const trimmed = state.languagePriority.map((s) => s.trim());
-  if (trimmed.length === 0) {
-    state.languageError =
-      "Add at least one language code before saving (e.g. en, zh-TW).";
+  // SPEC §7.4 rules are centralised in validateLanguagePriority.
+  // The validator returns BOTH the sanitised values (so a successful
+  // save uses the trimmed form) and any errors that should block
+  // the save and render inline. Per-row errors live in
+  // `state.languageRowErrors` and anchor to the offending input via
+  // aria-describedby; whole-list errors go into `state.languageError`
+  // and render once near the section's action row.
+  const validation = validateLanguagePriority(state.languagePriority);
+  state.languageRowErrors = validation.errors.filter(
+    (e) => e.index !== undefined,
+  );
+  const wholeListError = validation.errors.find((e) => e.index === undefined);
+  // Only set state.languageError when the validator emitted a
+  // whole-list error. If only per-row errors are present, each
+  // input already carries an inline message — adding a generic
+  // "Please fix the highlighted rows" banner would be redundant
+  // (and not part of SPEC §7.4's copy).
+  if (validation.errors.length > 0) {
+    state.languageError = wholeListError?.message ?? null;
     render();
     return;
   }
-  const blankIndex = trimmed.findIndex((s) => s.length === 0);
-  if (blankIndex !== -1) {
-    state.languageError = `Language ${blankIndex + 1} is empty. Remove the blank entry or fill it in before saving.`;
-    render();
-    return;
-  }
-  const result = await setPreferences({ languagePriority: trimmed });
+  const result = await setPreferences({ languagePriority: validation.trimmed });
   if (!result.ok) {
     state.languageError = `Could not save language priority: ${result.error.type}: ${result.error.message}`;
     render();
     return;
   }
-  state.languagePriority = trimmed;
+  state.languagePriority = validation.trimmed;
   state.languageError = null;
+  state.languageRowErrors = [];
   // A successful setPreferences clears any preferences-class banner
   // AND any "load" banner (storage path is provably working again).
   // Workflow-class banners survive.
