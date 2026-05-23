@@ -353,15 +353,39 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     case "subflow:execute-workflow":
       if (!isExecuteWorkflowPayload(message)) return false;
       {
+        // The sidebar can only send a PromptVariables placeholder
+        // (it has no access to the SubtitleService cache that owns
+        // the real transcript / title / channel). Reconstruct the
+        // real variables here from authoritative background state.
+        // If the subtitle hasn't been fetched yet for this
+        // (tab, video), refuse the request with a typed failure
+        // result rather than POSTing an empty prompt.
+        const realVariables = subtitles.buildPromptVariables(tabId, message.videoId);
+        if (realVariables === null) {
+          sendResponse({
+            videoId: message.videoId,
+            requestId: message.requestId,
+            result: {
+              workflowId: message.workflow.id,
+              workflowName: message.workflow.name,
+              outcome: "network-error",
+              body:
+                "Subtitle not loaded yet — open the video, wait for the sidebar to show \"Loaded\", then try again.",
+              timestamp: Date.now(),
+            },
+            suppressed: false,
+          });
+          return false;
+        }
         const dispatch =
           message.trigger === "auto"
             ? orchestrator.runAutoRun(
                 tabId,
                 message.videoId,
                 message.workflow,
-                message.variables,
+                realVariables,
               )
-            : orchestrator.runManual(tabId, message.workflow, message.variables);
+            : orchestrator.runManual(tabId, message.workflow, realVariables);
         dispatch
           .then((result) => {
             // autoRun dedup: a null result means "this (tabId,

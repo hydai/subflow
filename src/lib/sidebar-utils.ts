@@ -16,13 +16,18 @@ export const ERROR_BODY_CHAR_LIMIT = 2000;
 const TRUNCATION_MARKER = "…(truncated)";
 
 export function truncateBody(result: WorkflowResult): string {
-  if (
-    result.outcome === "http-error" &&
-    result.body.length > ERROR_BODY_CHAR_LIMIT
-  ) {
-    return result.body.slice(0, ERROR_BODY_CHAR_LIMIT) + TRUNCATION_MARKER;
-  }
-  return result.body;
+  // SPEC §7.6 narrows truncation to 4xx / 5xx specifically — 3xx
+  // redirects also surface as outcome:"http-error" via fetch's
+  // Response.ok === false, but their bodies are usually short
+  // redirect notices and shouldn't carry the truncation marker.
+  // (WorkflowResult.statusCode is typed as `number | undefined`;
+  // for outcome:"http-error" the runner always sets it, but check
+  // explicitly so the property access is safe.)
+  if (result.outcome !== "http-error") return result.body;
+  if (result.statusCode === undefined) return result.body;
+  if (result.statusCode < 400 || result.statusCode > 599) return result.body;
+  if (result.body.length <= ERROR_BODY_CHAR_LIMIT) return result.body;
+  return result.body.slice(0, ERROR_BODY_CHAR_LIMIT) + TRUNCATION_MARKER;
 }
 
 // SPEC §6.4 result-list semantics: newest entry at the top, capped

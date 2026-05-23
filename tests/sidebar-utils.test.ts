@@ -60,6 +60,15 @@ describe("truncateBody (SPEC §7.6)", () => {
       expect(out).toBe(long);
     }
   });
+
+  it("does NOT truncate http-error with a 3xx redirect status (SPEC §7.6 only 4xx/5xx)", () => {
+    const longBody = "x".repeat(ERROR_BODY_CHAR_LIMIT + 500);
+    const out = truncateBody(
+      result({ outcome: "http-error", statusCode: 301, body: longBody }),
+    );
+    // 3xx body length preserved, no truncation marker added.
+    expect(out).toBe(longBody);
+  });
 });
 
 describe("addResult (SPEC §6.4 result list)", () => {

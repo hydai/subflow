@@ -23,6 +23,7 @@ import { parseTimedText } from "@/lib/parse-timed-text";
 import type {
   ExtractError,
   ExtractedPlayerData,
+  PromptVariables,
   SubtitleFailure,
   SubtitleResult,
   SubtitleStatus,
@@ -66,6 +67,44 @@ export class SubtitleService {
   recordPlayerData(tabId: number, playerData: PlayerDataState): void {
     const state = this.touch(tabId);
     state.playerData = playerData;
+  }
+
+  // Assemble the prompt variable bag from cached state. Returns null
+  // when the subtitle for this (tabId, videoId) hasn't been fetched
+  // yet — the caller (background's execute-workflow handler) should
+  // refuse the workflow request rather than POST `{ prompt: "" }`.
+  //
+  // We deliberately pick the FIRST cache entry for the given videoId
+  // (regardless of language code) because each video has one
+  // matched-language slot in practice; if a user changes the language
+  // priority mid-session and the previous language is still cached,
+  // we'd rather hand out something current than refuse.
+  buildPromptVariables(tabId: number, videoId: string): PromptVariables | null {
+    const state = this.tabs.get(tabId);
+    if (state === undefined) return null;
+    const playerData = state.playerData;
+    if (playerData === null || !playerData.ok) return null;
+    if (playerData.data.videoDetails.videoId !== videoId) return null;
+    const prefix = `${videoId}|`;
+    let subtitle: SubtitleSuccess | undefined;
+    for (const [key, value] of state.subtitleCache) {
+      if (key.startsWith(prefix)) {
+        subtitle = value;
+        break;
+      }
+    }
+    if (subtitle === undefined) return null;
+    const details = playerData.data.videoDetails;
+    return {
+      transcript: subtitle.transcript,
+      transcript_with_timestamps: subtitle.transcriptWithTimestamps,
+      title: details.title,
+      channel: details.author,
+      video_id: videoId,
+      video_url: `https://www.youtube.com/watch?v=${videoId}`,
+      language: subtitle.language,
+      duration_seconds: details.lengthSeconds,
+    };
   }
 
   // "(tabId, videoId, languagePriority) → SubtitleResult".

@@ -188,13 +188,35 @@ interface SidebarState {
 }
 
 let sidebarState: SidebarState | null = null;
+// Bumped on every renderSidebar call. Captured by the async
+// initializer so a late-arriving setup for an old video can't
+// overwrite the sidebarState that a newer SPA navigation already
+// installed.
+let renderEpoch = 0;
 
 async function renderSidebar(
   shadow: ShadowRoot | null,
   videoId: string,
 ): Promise<void> {
   if (shadow === null) return;
+  const myEpoch = (renderEpoch += 1);
+  // Install a minimal sync sidebarState synchronously so the
+  // chrome.runtime.onMessage listener can sanity-check incoming
+  // pushes (which arrive without waiting for loadWorkflows).
+  sidebarState = {
+    workflows: [],
+    subtitle: null,
+    results: [],
+    pendingRequests: new Map(),
+    videoId,
+  };
+  paintSidebar(shadow, sidebarState);
   const workflows = await loadWorkflows();
+  if (renderEpoch !== myEpoch) {
+    // A newer SPA navigation already started rendering; bail so we
+    // don't overwrite the newer videoId's state.
+    return;
+  }
   sidebarState = {
     workflows,
     subtitle: null,
@@ -203,6 +225,58 @@ async function renderSidebar(
     videoId,
   };
   paintSidebar(shadow, sidebarState);
+  void requestSubtitle(videoId, shadow, myEpoch);
+}
+
+async function requestSubtitle(
+  videoId: string,
+  shadow: ShadowRoot,
+  epoch: number,
+): Promise<void> {
+  // The background owns the subtitle fetch (#7). Pull language
+  // priority from chrome.storage.local — the sidebar already loaded
+  // workflows, but languagePriority lives on the preferences key.
+  let languagePriority: string[] = [];
+  try {
+    const items = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      chrome.storage.local.get(["preferences"], (got) => {
+        const last = chrome.runtime.lastError;
+        if (last !== undefined && last !== null) {
+          reject(new Error(last.message ?? "storage.get failed"));
+          return;
+        }
+        resolve(got ?? {});
+      });
+    });
+    const prefs = items.preferences;
+    if (prefs !== null && typeof prefs === "object") {
+      const langs = (prefs as { languagePriority?: unknown }).languagePriority;
+      if (Array.isArray(langs)) {
+        languagePriority = langs.filter((s) => typeof s === "string") as string[];
+      }
+    }
+  } catch {
+    /* fall through; missing-language-priority status will surface */
+  }
+  try {
+    const response = (await chrome.runtime.sendMessage({
+      type: "subflow:request-subtitle",
+      videoId,
+      languagePriority,
+    })) as { videoId?: string; result?: SubtitleResult } | undefined;
+    if (response === undefined) return;
+    if (renderEpoch !== epoch) return;
+    if (sidebarState === null) return;
+    if (response.videoId !== sidebarState.videoId) return;
+    if (response.result !== undefined) {
+      sidebarState.subtitle = response.result;
+      paintSidebar(shadow, sidebarState);
+    }
+  } catch {
+    // Background unreachable (service worker reload in progress).
+    // The status stays "Loading…"; user can hit Refresh subtitle
+    // to retry.
+  }
 }
 
 async function loadWorkflows(): Promise<Workflow[]> {
@@ -462,8 +536,15 @@ async function triggerWorkflow(
 }
 
 function makePlaceholderVariables(videoId: string) {
-  // Defensive placeholder; #15+#16 wire the real variable substitution
-  // path through the background using the SubtitleService cache.
+  // The background's execute-workflow handler OVERRIDES whatever
+  // PromptVariables we pass here with the authoritative values it
+  // builds from its SubtitleService cache (title / channel /
+  // duration_seconds / transcript). This placeholder exists ONLY
+  // to satisfy the message-envelope validator, which requires the
+  // shape — the values are immediately discarded background-side
+  // before the workflow request is built. The cross-field check
+  // (envelope.videoId === variables.video_id) is preserved so the
+  // sender's identity claims still need to be consistent.
   return {
     transcript: "",
     transcript_with_timestamps: "",
