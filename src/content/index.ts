@@ -735,7 +735,56 @@ function renderResultEntry(result: WorkflowResult): HTMLElement {
   body.textContent = truncateBody(result);
   item.appendChild(body);
 
+  // SPEC §6.6 #18: Retry button appears for outcomes the user can
+  // reasonably want to retry — 5xx, timeout, network-error,
+  // precondition-failed, and the synthetic "background interrupted"
+  // result (also a network-error). NOT 4xx (user-config error)
+  // and NOT aborted (suppressed by the response handler anyway).
+  if (shouldOfferRetry(result)) {
+    const retry = document.createElement("button");
+    retry.type = "button";
+    retry.className = "subflow-cta-button";
+    retry.textContent = "Retry";
+    retry.addEventListener("click", () => {
+      void retryWorkflow(result.workflowId);
+    });
+    item.appendChild(retry);
+  }
+
   return item;
+}
+
+function shouldOfferRetry(result: WorkflowResult): boolean {
+  if (result.outcome === "success") return false;
+  if (result.outcome === "aborted") return false;
+  if (
+    result.outcome === "http-error" &&
+    result.statusCode !== undefined &&
+    result.statusCode >= 400 &&
+    result.statusCode < 500
+  ) {
+    // 4xx is typically misconfiguration on the user's side
+    // (wrong URL, wrong auth headers). A retry without changing
+    // the configuration would just produce the same 4xx.
+    return false;
+  }
+  return true;
+}
+
+async function retryWorkflow(workflowId: string): Promise<void> {
+  if (sidebarState === null || sidebarShadow === null) return;
+  // Look up the latest definition of this workflow from the
+  // cached list, in case the user edited it between the failure
+  // and the retry. (cachedWorkflows reflects the workflows as of
+  // the current watch-page mount, per SPEC §6.8.)
+  const workflow = sidebarState.workflows.find((w) => w.id === workflowId);
+  if (workflow === undefined) {
+    // Workflow was deleted between the failure and the retry —
+    // there's nothing to retry. Silently no-op; the result entry
+    // stays in the list so the user can see they attempted it.
+    return;
+  }
+  await triggerWorkflow(workflow, sidebarShadow);
 }
 
 function formatOutcomeLabel(result: WorkflowResult): string {
@@ -743,13 +792,16 @@ function formatOutcomeLabel(result: WorkflowResult): string {
     case "success":
       return `Success (HTTP ${result.statusCode})`;
     case "http-error":
-      return `HTTP ${result.statusCode}`;
+      if (result.statusCode !== undefined && result.statusCode >= 500) {
+        return `Server error (HTTP ${result.statusCode})`;
+      }
+      return `Client error (HTTP ${result.statusCode})`;
     case "timeout":
-      return "Timed out";
+      return "Timed out after 60 seconds";
     case "aborted":
       return "Aborted";
     case "network-error":
-      return "Network error";
+      return "Workflow request failed";
     case "precondition-failed":
       return "Waiting for subtitle";
   }

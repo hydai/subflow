@@ -21,6 +21,114 @@ import type { PromptVariables, Workflow } from "@/lib/types";
 const subtitles = new SubtitleService({ fetchSubtitleXml });
 const orchestrator = new WorkflowOrchestrator();
 
+// SPEC §6.6 — MV3 service workers can be terminated by Chrome when
+// idle, and a workflow request that was in flight at that moment
+// loses its Promise context. The "background service interrupted"
+// detection works in two layers:
+//
+//   1. Every workflow execution is logged to chrome.storage.local
+//      under `inFlightWorkflows` with the request envelope. When
+//      the runner resolves (success OR failure), the entry is
+//      removed.
+//   2. On service-worker startup, we read that key. Any residual
+//      entries belonged to a previous worker that was terminated
+//      mid-flight; we synthesise a network-error result with an
+//      "interrupted" body and push it to the originating tab so
+//      the sidebar can render the failure + a Retry button. Then
+//      we clear the storage entry.
+//
+// We use chrome.storage.local rather than session storage because
+// the worker termination wipes any in-memory state, and we want
+// the detection to survive across worker generations (potentially
+// many minutes between the original request and the next user
+// action that wakes the worker).
+const IN_FLIGHT_STORAGE_KEY = "subflow.inFlightWorkflows";
+
+interface InFlightRecord {
+  tabId: number;
+  videoId: string;
+  requestId: string;
+  workflowId: string;
+  workflowName: string;
+  startedAt: number;
+}
+
+async function recordInFlight(record: InFlightRecord): Promise<void> {
+  const current = await readInFlight();
+  current[record.requestId] = record;
+  await writeInFlight(current);
+}
+
+async function clearInFlight(requestId: string): Promise<void> {
+  const current = await readInFlight();
+  if (current[requestId] === undefined) return;
+  delete current[requestId];
+  await writeInFlight(current);
+}
+
+async function readInFlight(): Promise<Record<string, InFlightRecord>> {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([IN_FLIGHT_STORAGE_KEY], (items) => {
+        const raw = items?.[IN_FLIGHT_STORAGE_KEY];
+        if (raw === null || typeof raw !== "object") {
+          resolve({});
+          return;
+        }
+        resolve(raw as Record<string, InFlightRecord>);
+      });
+    } catch {
+      resolve({});
+    }
+  });
+}
+
+async function writeInFlight(
+  records: Record<string, InFlightRecord>,
+): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.set({ [IN_FLIGHT_STORAGE_KEY]: records }, () => {
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
+// Run once at service-worker startup. Any in-flight entry left over
+// from a previous worker generation is a request that didn't get to
+// emit a result — synthesise an "interrupted" result and push it to
+// the originating tab.
+void replayInterruptedWorkflows();
+async function replayInterruptedWorkflows(): Promise<void> {
+  const residual = await readInFlight();
+  const entries = Object.values(residual);
+  if (entries.length === 0) return;
+  await writeInFlight({});
+  for (const record of entries) {
+    try {
+      await chrome.tabs.sendMessage(record.tabId, {
+        type: "subflow:workflow-result",
+        videoId: record.videoId,
+        requestId: record.requestId,
+        result: {
+          workflowId: record.workflowId,
+          workflowName: record.workflowName,
+          outcome: "network-error",
+          body:
+            "Background service was interrupted while this workflow was running. Click Retry to start over.",
+          timestamp: Date.now(),
+        },
+        suppressed: false,
+      });
+    } catch {
+      // Tab may have closed in the meantime; nothing to surface.
+    }
+  }
+}
+
 chrome.action.onClicked.addListener(() => {
   chrome.runtime.openOptionsPage();
 });
@@ -399,6 +507,20 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
           });
           return false;
         }
+        // Record the in-flight workflow so a service-worker
+        // termination mid-fetch can be surfaced to the sidebar on
+        // the next wake (see replayInterruptedWorkflows). Skip for
+        // autoRun dedup-hit paths because runAutoRun resolves to
+        // null synchronously without actually firing a request.
+        const inFlightRecord: InFlightRecord = {
+          tabId,
+          videoId: message.videoId,
+          requestId: message.requestId,
+          workflowId: message.workflow.id,
+          workflowName: message.workflow.name,
+          startedAt: Date.now(),
+        };
+        void recordInFlight(inFlightRecord);
         const dispatch =
           message.trigger === "auto"
             ? orchestrator.runAutoRun(
@@ -416,6 +538,13 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             // but mark it suppressed so the sidebar doesn't add an
             // entry to the result list.
             if (result === null) {
+              // Dedup hit — no actual request was issued, so the
+              // in-flight record needs to come back off the
+              // storage scratchpad. Without this, the residual
+              // would replay as "background interrupted" on the
+              // NEXT worker startup even though nothing was
+              // actually in flight.
+              void clearInFlight(message.requestId);
               sendResponse({
                 videoId: message.videoId,
                 requestId: message.requestId,
@@ -424,6 +553,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
               });
               return;
             }
+            void clearInFlight(message.requestId);
             // SPEC §6.7: aborted requests do not produce sidebar
             // entries.
             sendResponse({
@@ -434,6 +564,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             });
           })
           .catch((err: unknown) => {
+            void clearInFlight(message.requestId);
             sendResponse({
               videoId: message.videoId,
               requestId: message.requestId,
