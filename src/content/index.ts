@@ -104,6 +104,9 @@ function syncSidebar(): void {
     // from storage.
     cachedWorkflows = null;
     workflowsLoadFailed = false;
+    // Drop the scroll-restore cookie too — the next mount gets a
+    // fresh sidebar and there's no meaningful position to restore.
+    savedScrollBeforeCollapse = null;
     renderEpoch += 1;
     return;
   }
@@ -250,6 +253,14 @@ async function renderSidebar(
 ): Promise<void> {
   if (shadow === null) return;
   const myEpoch = (renderEpoch += 1);
+  // A fresh mount means the previous root element is being thrown
+  // away (paintSidebar's shadow.replaceChildren()). Any scroll
+  // position the user had stashed via the collapse toggle was
+  // captured on the OLD root; restoring it onto the NEW root would
+  // mean "scrolled to byte N of the previous video's result list"
+  // — nonsensical. Reset so the next expand on this fresh sidebar
+  // starts at the top.
+  savedScrollBeforeCollapse = null;
   // Install a minimal sync sidebarState immediately so the
   // chrome.runtime.onMessage listener can sanity-check incoming
   // pushes (which arrive without waiting for loadWorkflows) — and
