@@ -383,7 +383,15 @@ function renderWorkflowsList(): HTMLElement {
     );
   } else {
     const ul = el("ul", { class: "workflow-list" });
-    visible.forEach((w, idx) => ul.appendChild(renderWorkflowRow(w, idx)));
+    const total = visible.length;
+    // Pass idx + total directly into the row renderer so boundary
+    // computation is O(1) per row instead of O(N) via findIndex.
+    // Without this, rendering N rows is O(N²) on every render() —
+    // wasteful even at small N when render() runs on every input
+    // event.
+    visible.forEach((w, idx) =>
+      ul.appendChild(renderWorkflowRow(w, idx, total)),
+    );
     section.appendChild(ul);
   }
   const actions = el("div", { class: "actions" });
@@ -392,7 +400,7 @@ function renderWorkflowsList(): HTMLElement {
   return section;
 }
 
-function renderWorkflowRow(w: Workflow, _idx: number): HTMLElement {
+function renderWorkflowRow(w: Workflow, idx: number, total: number): HTMLElement {
   const li = el("li");
   const meta = el("div", { class: "meta" });
   const nameSpan = el("div", { class: "name" }, w.name);
@@ -401,14 +409,12 @@ function renderWorkflowRow(w: Workflow, _idx: number): HTMLElement {
   }
   const urlDiv = el("div", { class: "url" }, w.url);
   meta.append(nameSpan, urlDiv);
-  // Source the boundary state from the pending list so reorder
-  // buttons reflect the latest intent (matching what moveWorkflow
-  // actually operates on), not the still-committed render input.
-  const visible = latestPending() ?? state.workflows;
-  const visibleIdx = visible.findIndex((x) => x.id === w.id);
-  const total = visible.length;
-  const isFirst = visibleIdx <= 0;
-  const isLast = visibleIdx === -1 || visibleIdx === total - 1;
+  // Boundary state comes directly from idx + total. The caller passes
+  // the same indices it iterated over, which already match the
+  // pending list because renderWorkflowsList sources its iteration
+  // from latestPending() ?? state.workflows.
+  const isFirst = idx === 0;
+  const isLast = idx === total - 1;
   const up = iconButton(
     "↑",
     `Move workflow "${w.name}" up`,
@@ -800,9 +806,23 @@ function field(
 function errorFor(
   field: WorkflowValidationError["field"],
 ): HTMLElement | null {
-  const err = state.validationErrors.find((e) => e.field === field);
-  if (err === undefined) return null;
-  return el("p", { class: "error", role: "alert" }, err.message);
+  // validateWorkflow can emit multiple errors against the same field
+  // (e.g. headers can have both a Content-Type collision AND a
+  // non-string value). Render all of them so the user can fix the
+  // form in one pass instead of finding hidden problems after each
+  // save attempt.
+  const matching = state.validationErrors.filter((e) => e.field === field);
+  if (matching.length === 0) return null;
+  if (matching.length === 1) {
+    return el("p", { class: "error", role: "alert" }, matching[0]!.message);
+  }
+  const wrap = el("div", { class: "error", role: "alert" });
+  const list = el("ul");
+  for (const err of matching) {
+    list.appendChild(el("li", {}, err.message));
+  }
+  wrap.appendChild(list);
+  return wrap;
 }
 
 function textInput(
