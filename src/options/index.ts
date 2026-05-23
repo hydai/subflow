@@ -494,6 +494,15 @@ async function persistAndCommit(next: Workflow[]): Promise<void> {
       source: "workflows",
       message: `Could not save workflows: ${result.error.type}: ${result.error.message}`,
     };
+    // On a failed write, drop this attempt from `inFlightNext` so
+    // the renderer doesn't keep painting the unsaved-pending order
+    // as if it were the latest intent. Without this, the workflow
+    // list would show the would-be reorder forever even though the
+    // write failed and state.workflows wasn't committed. (The
+    // enqueuePersist finally also clears inFlightNext, but it does
+    // so AFTER this function returns; the render() below would
+    // catch the stale value if we didn't clear here first.)
+    inFlightNext = null;
     render();
     return;
   }
