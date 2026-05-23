@@ -694,19 +694,18 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
             // Still send a response so the sender's promise settles,
             // but mark it suppressed so the sidebar doesn't add an
             // entry to the result list.
-            // Try to clear the in-flight record BEFORE
-            // sendResponse so a worker termination immediately
-            // after this microtask doesn't replay this resolved
-            // request as "interrupted" on next wake.
-            // Best-effort — if the clear itself errors (rare; same
-            // failure modes as recordInFlight), we still need to
-            // return a result to the sidebar, so swallow and
-            // continue. The next replay will produce one stale
-            // "interrupted" entry, which the user can dismiss via
-            // Retry.
-            await recordingPromise
-              .then(() => clearInFlight(message.requestId))
-              .catch(() => undefined);
+            // Send the response FIRST so the sidebar gets its
+            // promise settled while the worker's still alive. The
+            // clear happens after — if the worker dies between
+            // sendResponse and clearInFlight, the residual record
+            // gets replayed as "interrupted" on next wake, and
+            // the sidebar's requestId dedup either drops the
+            // duplicate (success case) or upgrades the
+            // network-error entry to "interrupted". The opposite
+            // ordering (clear first) would lose the replay record
+            // on a worker termination between clear and
+            // sendResponse, leaving the sidebar's catch handler to
+            // render a generic network-error with no later upgrade.
             if (result === null) {
               // Dedup hit — no actual request was issued.
               sendResponse({
@@ -715,21 +714,21 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
                 result: null,
                 suppressed: true,
               });
-              return;
+            } else {
+              // SPEC §6.7: aborted requests do not produce sidebar
+              // entries.
+              sendResponse({
+                videoId: message.videoId,
+                requestId: message.requestId,
+                result,
+                suppressed: result.outcome === "aborted",
+              });
             }
-            // SPEC §6.7: aborted requests do not produce sidebar
-            // entries.
-            sendResponse({
-              videoId: message.videoId,
-              requestId: message.requestId,
-              result,
-              suppressed: result.outcome === "aborted",
-            });
-          })
-          .catch(async (err: unknown) => {
             await recordingPromise
               .then(() => clearInFlight(message.requestId))
               .catch(() => undefined);
+          })
+          .catch(async (err: unknown) => {
             sendResponse({
               videoId: message.videoId,
               requestId: message.requestId,
@@ -742,6 +741,16 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
               },
               suppressed: false,
             });
+            // Clear AFTER sendResponse — same rationale as the
+            // resolved path above. If the worker is terminated
+            // between sendResponse and the clear, the residual
+            // record gets replayed on next wake and dedups
+            // against the network-error we just rendered (the
+            // sidebar's upgrade-to-interrupted path turns the
+            // entry into something more accurate).
+            await recordingPromise
+              .then(() => clearInFlight(message.requestId))
+              .catch(() => undefined);
           });
       }
       // Keep the message channel open for the async sendResponse.
