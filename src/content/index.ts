@@ -790,6 +790,16 @@ function shouldOfferRetry(result: WorkflowResult): boolean {
 
 async function retryWorkflow(workflowId: string): Promise<void> {
   if (sidebarState === null || sidebarShadow === null) return;
+  // Mirror the workflow-button gating: if subtitles aren't ready,
+  // a retry would just queue up another precondition-failed result.
+  // The button is still visually clickable (it's a CTA-styled
+  // <button> without a disabled prop), so the no-op gate lives
+  // here. Without this, clicking Retry on an old failure while
+  // the subtitle is reloading would spam the result list with
+  // precondition-failed entries.
+  if (sidebarState.subtitle === null || sidebarState.subtitle.status !== "ok") {
+    return;
+  }
   // Look up the workflow from the cached list (read once per
   // watch-page mount per SPEC §6.8 — no live subscription to
   // options-page edits, so the lookup matches whatever was
@@ -1044,6 +1054,12 @@ function isSubtitleResultLike(value: unknown): boolean {
   return true;
 }
 
+// Cap on the dedupe Set so it can't grow without bound during a
+// long watch-page session. We keep ~3x the result list capacity
+// (15) so a recently-evicted result's requestId still blocks a
+// late-arriving duplicate, but the Set's footprint stays small.
+const SEEN_REQUEST_IDS_CAP = 15;
+
 function handleWorkflowResponse(
   response: WorkflowResponse,
   shadow: ShadowRoot,
@@ -1057,6 +1073,13 @@ function handleWorkflowResponse(
   // local synthetic + replay) lands at most once in the list.
   if (sidebarState.seenRequestIds.has(response.requestId)) return;
   sidebarState.seenRequestIds.add(response.requestId);
+  // FIFO trim. Set iteration order is insertion order, so the
+  // first key is the oldest. Drop until we're under the cap.
+  while (sidebarState.seenRequestIds.size > SEEN_REQUEST_IDS_CAP) {
+    const oldest = sidebarState.seenRequestIds.values().next().value;
+    if (oldest === undefined) break;
+    sidebarState.seenRequestIds.delete(oldest);
+  }
   sidebarState.results = addResult(sidebarState.results, response.result);
   paintSidebar(shadow, sidebarState);
 }
