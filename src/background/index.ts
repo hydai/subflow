@@ -234,7 +234,9 @@ async function replayInterruptedWorkflows(): Promise<void> {
           result: {
             workflowId: record.workflowId,
             workflowName: record.workflowName,
-            outcome: "network-error",
+            // Dedicated outcome variant so the sidebar can render
+            // a precise label without sniffing the body string.
+            outcome: "interrupted",
             body:
               "Background service was interrupted while this workflow was running. Click Retry to start over.",
             timestamp: Date.now(),

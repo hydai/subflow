@@ -741,14 +741,11 @@ function renderResultEntry(result: WorkflowResult): HTMLElement {
   // result (also a network-error). NOT 4xx (user-config error)
   // and NOT aborted (suppressed by the response handler anyway).
   if (shouldOfferRetry(result)) {
-    const retry = document.createElement("button");
-    retry.type = "button";
-    retry.className = "subflow-cta-button";
-    retry.textContent = "Retry";
-    retry.addEventListener("click", () => {
-      void retryWorkflow(result.workflowId);
-    });
-    item.appendChild(retry);
+    item.appendChild(
+      ctaButton("Retry", () => {
+        void retryWorkflow(result.workflowId);
+      }),
+    );
   }
 
   return item;
@@ -826,20 +823,11 @@ function formatOutcomeLabel(result: WorkflowResult): string {
     case "aborted":
       return "Aborted";
     case "network-error":
-      // SPEC §6.6 distinguishes the "background service interrupted"
-      // case from a generic network failure. The replay path uses
-      // outcome:"network-error" with a body that begins with
-      // "Background service was interrupted" (kept in sync with
-      // replayInterruptedWorkflows in src/background/index.ts).
-      // Surface the distinction in the label so the user sees
-      // "Background service interrupted" instead of the generic
-      // "Workflow request failed".
-      if (result.body.startsWith("Background service was interrupted")) {
-        return "Background service interrupted";
-      }
       return "Workflow request failed";
     case "precondition-failed":
       return "Waiting for subtitle";
+    case "interrupted":
+      return "Background service interrupted";
   }
 }
 
@@ -984,6 +972,7 @@ const VALID_WORKFLOW_OUTCOMES = new Set([
   "timeout",
   "aborted",
   "precondition-failed",
+  "interrupted",
 ]);
 
 function isWorkflowResponse(value: unknown): value is WorkflowResponse {
