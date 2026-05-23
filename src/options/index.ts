@@ -278,22 +278,34 @@ function renderLanguageSection(): HTMLElement {
       // soon as the user starts typing in any row, the stored
       // row-error indices and the section banner stop describing
       // reality (the user is in the middle of fixing them). Clear
-      // both immediately so stale red highlighting / messages don't
-      // linger between keystrokes and the next save click. The
-      // listener doesn't re-render so the user's caret position is
-      // preserved while typing.
+      // both AND scrub the visible row errors + banner from the DOM
+      // without doing a full re-render — that would blow away the
+      // user's caret in this input. The other rows' stale state
+      // also goes away because we walk every previously-rendered
+      // row error and the section banner directly.
       if (
         state.languageRowErrors.length > 0 ||
         state.languageError !== null
       ) {
         clearLanguageValidationState();
-        // Remove the stale row-level visual state from THIS input
-        // without a full re-render (which would blow away the
-        // caret). The other rows' stale highlighting persists
-        // until the next render(), which is fine — any subsequent
-        // structural edit OR a successful save will repaint.
-        input.removeAttribute("aria-invalid");
-        input.removeAttribute("aria-describedby");
+        // Remove every row's <p id="lang-N-err"> error node and
+        // strip the aria-invalid / aria-describedby it anchored,
+        // including from rows other than this one. This way the
+        // user doesn't see a stale red message on row 2 just
+        // because they typed in row 1.
+        for (let i = 0; i < state.languagePriority.length; i += 1) {
+          const otherId = `lang-${i}`;
+          const otherInput = document.getElementById(otherId);
+          otherInput?.removeAttribute("aria-invalid");
+          otherInput?.removeAttribute("aria-describedby");
+          const errNode = document.getElementById(`${otherId}-err`);
+          errNode?.remove();
+        }
+        // The section-level banner — if present — also no longer
+        // describes the current input state, so drop it.
+        document
+          .querySelectorAll(".lang-prefs > .error")
+          .forEach((node) => node.remove());
       }
     });
     const rowError = state.languageRowErrors.find((e) => e.index === idx);
